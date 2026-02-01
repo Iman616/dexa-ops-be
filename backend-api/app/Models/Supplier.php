@@ -20,6 +20,11 @@ class Supplier extends Model
         'address',
     ];
 
+    public function products()
+    {
+        return $this->hasMany(Product::class, 'supplier_id', 'supplier_id');
+    }
+
     public function purchaseOrders()
     {
         return $this->hasMany(SupplierPo::class, 'supplier_id', 'supplier_id');

@@ -1,0 +1,385 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\Invoice;
+use App\Models\Payment;
+use App\Models\Receipt;
+use App\Models\Customer;
+use App\Models\Product;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
+
+class DashboardController extends Controller
+{
+    /**
+     * Get Dashboard Statistics
+     */
+    public function getStats()
+    {
+        try {
+            // Invoice Statistics
+            $totalInvoices = Invoice::count();
+            $totalAmount = Invoice::sum('total_amount');
+            
+            $paidInvoices = Invoice::where('payment_status', 'paid')->count();
+            $paidAmount = Invoice::where('payment_status', 'paid')->sum('total_amount');
+            
+            $unpaidInvoices = Invoice::where('payment_status', 'unpaid')->count();
+            $unpaidAmount = Invoice::where('payment_status', 'unpaid')->sum('total_amount');
+            
+            $partialInvoices = Invoice::where('payment_status', 'partial')->count();
+            $partialAmount = Invoice::where('payment_status', 'partial')->sum('total_amount');
+            
+            // Overdue Invoices
+            $overdueInvoices = Invoice::where('payment_status', 'unpaid')
+                ->where('due_date', '<', now())
+                ->count();
+            $overdueAmount = Invoice::where('payment_status', 'unpaid')
+                ->where('due_date', '<', now())
+                ->sum('total_amount');
+
+            // Payment Statistics
+            $totalPayments = Payment::count();
+            $totalPaymentAmount = Payment::where('payment_status', 'success')->sum('amount');
+            
+            $pendingPayments = Payment::where('payment_status', 'pending')->count();
+            $pendingPaymentAmount = Payment::where('payment_status', 'pending')->sum('amount');
+
+            // Receipt Statistics
+            $totalReceipts = Receipt::count();
+            $totalReceiptAmount = Receipt::sum('amount');
+
+            // Customer Statistics
+            $totalCustomers = Customer::count();
+            $activeCustomers = Customer::where('status', 'active')->count();
+
+            // Product Statistics
+            $totalProducts = Product::count();
+            $activeProducts = Product::where('status', 'active')->count();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    // Invoice Stats
+                    'total_invoices' => $totalInvoices,
+                    'total_amount' => $totalAmount,
+                    'paid_invoices' => $paidInvoices,
+                    'paid_amount' => $paidAmount,
+                    'unpaid_invoices' => $unpaidInvoices,
+                    'unpaid_amount' => $unpaidAmount,
+                    'partial_invoices' => $partialInvoices,
+                    'partial_amount' => $partialAmount,
+                    'overdue_invoices' => $overdueInvoices,
+                    'overdue_amount' => $overdueAmount,
+                    
+                    // Payment Stats
+                    'total_payments' => $totalPayments,
+                    'total_payment_amount' => $totalPaymentAmount,
+                    'pending_payments' => $pendingPayments,
+                    'pending_payment_amount' => $pendingPaymentAmount,
+                    
+                    // Receipt Stats
+                    'total_receipts' => $totalReceipts,
+                    'total_receipt_amount' => $totalReceiptAmount,
+                    
+                    // Customer Stats
+                    'total_customers' => $totalCustomers,
+                    'active_customers' => $activeCustomers,
+                    
+                    // Product Stats
+                    'total_products' => $totalProducts,
+                    'active_products' => $activeProducts,
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch dashboard statistics',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get Recent Transactions
+     */
+    public function getRecentTransactions(Request $request)
+    {
+        try {
+            $limit = $request->input('limit', 10);
+            $transactions = [];
+
+            // Get Recent Invoices
+            $invoices = Invoice::with('customer')
+                ->orderBy('created_at', 'desc')
+                ->limit($limit)
+                ->get()
+                ->map(function ($invoice) {
+                    return [
+                        'id' => $invoice->invoice_id,
+                        'type' => 'invoice',
+                        'number' => $invoice->invoice_number,
+                        'customer_name' => $invoice->customer->customer_name ?? 'N/A',
+                        'amount' => $invoice->total_amount,
+                        'status' => $invoice->payment_status,
+                        'date' => $invoice->invoice_date,
+                        'created_at' => $invoice->created_at,
+                    ];
+                });
+
+            // Get Recent Payments
+            $payments = Payment::with('invoice.customer')
+                ->orderBy('created_at', 'desc')
+                ->limit($limit)
+                ->get()
+                ->map(function ($payment) {
+                    return [
+                        'id' => $payment->payment_id,
+                        'type' => 'payment',
+                        'number' => $payment->payment_number,
+                        'customer_name' => $payment->invoice->customer->customer_name ?? 'N/A',
+                        'amount' => $payment->amount,
+                        'status' => $payment->payment_status,
+                        'date' => $payment->payment_date,
+                        'created_at' => $payment->created_at,
+                    ];
+                });
+
+            // Get Recent Receipts
+            $receipts = Receipt::with('invoice.customer')
+                ->orderBy('created_at', 'desc')
+                ->limit($limit)
+                ->get()
+                ->map(function ($receipt) {
+                    return [
+                        'id' => $receipt->receipt_id,
+                        'type' => 'receipt',
+                        'number' => $receipt->receipt_number,
+                        'customer_name' => $receipt->invoice->customer->customer_name ?? $receipt->received_from,
+                        'amount' => $receipt->amount,
+                        'status' => 'completed',
+                        'date' => $receipt->receipt_date,
+                        'created_at' => $receipt->created_at,
+                    ];
+                });
+
+            // Merge and sort by created_at
+            $transactions = collect()
+                ->merge($invoices)
+                ->merge($payments)
+                ->merge($receipts)
+                ->sortByDesc('created_at')
+                ->take($limit)
+                ->values();
+
+            return response()->json([
+                'success' => true,
+                'data' => $transactions
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch recent transactions',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get Monthly Revenue
+     */
+    public function getMonthlyRevenue(Request $request)
+    {
+        try {
+            $months = $request->input('months', 6);
+            
+            $monthlyRevenue = Invoice::select(
+                    DB::raw('MONTH(invoice_date) as month'),
+                    DB::raw('YEAR(invoice_date) as year'),
+                    DB::raw('SUM(total_amount) as total_amount'),
+                    DB::raw('COUNT(*) as invoice_count')
+                )
+                ->where('invoice_date', '>=', Carbon::now()->subMonths($months))
+                ->groupBy('year', 'month')
+                ->orderBy('year', 'asc')
+                ->orderBy('month', 'asc')
+                ->get();
+
+            // Fill missing months with zero
+            $result = [];
+            for ($i = $months - 1; $i >= 0; $i--) {
+                $date = Carbon::now()->subMonths($i);
+                $month = $date->month;
+                $year = $date->year;
+
+                $found = $monthlyRevenue->first(function ($item) use ($month, $year) {
+                    return $item->month == $month && $item->year == $year;
+                });
+
+                $result[] = [
+                    'month' => str_pad($month, 2, '0', STR_PAD_LEFT),
+                    'year' => $year,
+                    'total_amount' => $found ? $found->total_amount : 0,
+                    'invoice_count' => $found ? $found->invoice_count : 0,
+                ];
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $result
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch monthly revenue',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get Payment Method Statistics
+     */
+    public function getPaymentMethodStats()
+    {
+        try {
+            $paymentMethods = Payment::select(
+                    'payment_method',
+                    DB::raw('COUNT(*) as count'),
+                    DB::raw('SUM(amount) as total_amount')
+                )
+                ->where('payment_status', 'success')
+                ->groupBy('payment_method')
+                ->get();
+
+            $totalAmount = $paymentMethods->sum('total_amount');
+
+            $result = $paymentMethods->map(function ($item) use ($totalAmount) {
+                return [
+                    'payment_method' => $item->payment_method,
+                    'count' => $item->count,
+                    'total_amount' => $item->total_amount,
+                    'percentage' => $totalAmount > 0 ? round(($item->total_amount / $totalAmount) * 100, 2) : 0,
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $result
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch payment method statistics',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get Top Customers
+     */
+    public function getTopCustomers(Request $request)
+    {
+        try {
+            $limit = $request->input('limit', 5);
+
+            $topCustomers = Customer::select(
+                    'customers.customer_id',
+                    'customers.customer_name',
+                    DB::raw('COUNT(invoices.invoice_id) as total_invoices'),
+                    DB::raw('SUM(invoices.total_amount) as total_amount'),
+                    DB::raw('MAX(invoices.invoice_date) as last_transaction')
+                )
+                ->join('invoices', 'customers.customer_id', '=', 'invoices.customer_id')
+                ->groupBy('customers.customer_id', 'customers.customer_name')
+                ->orderBy('total_amount', 'desc')
+                ->limit($limit)
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $topCustomers
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch top customers',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get Invoice Status Distribution
+     */
+    public function getInvoiceStatusDistribution()
+    {
+        try {
+            $distribution = Invoice::select(
+                    'payment_status',
+                    DB::raw('COUNT(*) as count'),
+                    DB::raw('SUM(total_amount) as total_amount')
+                )
+                ->groupBy('payment_status')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $distribution
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch invoice status distribution',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get Weekly Revenue Comparison
+     */
+    public function getWeeklyRevenue()
+    {
+        try {
+            $thisWeek = Invoice::where('invoice_date', '>=', Carbon::now()->startOfWeek())
+                ->where('invoice_date', '<=', Carbon::now()->endOfWeek())
+                ->sum('total_amount');
+
+            $lastWeek = Invoice::where('invoice_date', '>=', Carbon::now()->subWeek()->startOfWeek())
+                ->where('invoice_date', '<=', Carbon::now()->subWeek()->endOfWeek())
+                ->sum('total_amount');
+
+            $percentageChange = $lastWeek > 0 
+                ? round((($thisWeek - $lastWeek) / $lastWeek) * 100, 2) 
+                : 0;
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'this_week' => $thisWeek,
+                    'last_week' => $lastWeek,
+                    'percentage_change' => $percentageChange,
+                    'is_increase' => $thisWeek >= $lastWeek,
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch weekly revenue',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+}

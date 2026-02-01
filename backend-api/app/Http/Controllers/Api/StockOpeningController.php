@@ -1,9 +1,11 @@
 <?php
 
 namespace App\Http\Controllers\Api;
+
 use App\Http\Controllers\Controller;
 use App\Models\StockOpening;
 use App\Models\StockBatch;
+use App\Models\EndingStock;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
@@ -16,10 +18,10 @@ class StockOpeningController extends Controller
             'product_id' => 'required|exists:products,product_id',
             'batch_number' => 'required|string|max:100',
             'quantity' => 'required|integer|min:0',
-            'value' => 'required|string',
+            'value' => 'required|numeric',
             'opening_date' => 'required|date',
             'manufacture_date' => 'nullable|date',
-            'expiry_date' => 'nullable|date', // ✅ HAPUS after_or_equal
+            'expiry_date' => 'nullable|date',
         ]);
 
         if ($validator->fails()) {
@@ -53,6 +55,10 @@ class StockOpeningController extends Controller
                 'value' => $request->value,
                 'opening_date' => $request->opening_date,
             ]);
+
+            // Update ending stock
+            $date = \Carbon\Carbon::parse($request->opening_date);
+            EndingStock::updateEndingStock($batch->batch_id, $date->year, $date->month);
 
             DB::commit();
 
@@ -89,10 +95,10 @@ class StockOpeningController extends Controller
             'product_id' => 'required|exists:products,product_id',
             'batch_number' => 'required|string|max:100',
             'quantity' => 'required|integer|min:0',
-            'value' => 'required|string',
+            'value' => 'required|numeric',
             'opening_date' => 'required|date',
             'manufacture_date' => 'nullable|date',
-            'expiry_date' => 'nullable|date', // ✅ HAPUS after_or_equal
+            'expiry_date' => 'nullable|date',
         ]);
 
         if ($validator->fails()) {
@@ -105,6 +111,9 @@ class StockOpeningController extends Controller
 
         try {
             DB::beginTransaction();
+
+            $oldBatchId = $stockOpening->batch_id;
+            $oldDate = \Carbon\Carbon::parse($stockOpening->opening_date);
 
             // Update or create batch
             $batch = StockBatch::updateOrCreate(
@@ -127,6 +136,13 @@ class StockOpeningController extends Controller
                 'opening_date' => $request->opening_date,
             ]);
 
+            // Update ending stock for old period
+            EndingStock::updateEndingStock($oldBatchId, $oldDate->year, $oldDate->month);
+
+            // Update ending stock for new period
+            $newDate = \Carbon\Carbon::parse($request->opening_date);
+            EndingStock::updateEndingStock($batch->batch_id, $newDate->year, $newDate->month);
+
             DB::commit();
 
             $stockOpening->load(['product', 'batch']);
@@ -147,12 +163,51 @@ class StockOpeningController extends Controller
         }
     }
 
+    public function destroy($id)
+    {
+        try {
+            $stockOpening = StockOpening::find($id);
+
+            if (!$stockOpening) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Stock opening not found'
+                ], 404);
+            }
+
+            DB::beginTransaction();
+
+            $batchId = $stockOpening->batch_id;
+            $date = \Carbon\Carbon::parse($stockOpening->opening_date);
+
+            $stockOpening->delete();
+
+            // Update ending stock after deletion
+            EndingStock::updateEndingStock($batchId, $date->year, $date->month);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Stock opening deleted successfully'
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete stock opening: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    // Method lainnya tetap sama...
     public function index(Request $request)
     {
         try {
             $query = StockOpening::with(['product', 'batch']);
 
-            // Search
             if ($request->has('search') && $request->search) {
                 $search = $request->search;
                 $query->whereHas('product', function ($q) use ($search) {
@@ -161,23 +216,19 @@ class StockOpeningController extends Controller
                 });
             }
 
-            // Filter by product
             if ($request->has('product_id')) {
                 $query->where('product_id', $request->product_id);
             }
 
-            // Filter by period
             if ($request->has('period_month') && $request->has('period_year')) {
                 $query->whereYear('opening_date', $request->period_year)
                       ->whereMonth('opening_date', $request->period_month);
             }
 
-            // Sorting
             $sortBy = $request->get('sort_by', 'opening_date');
             $sortOrder = $request->get('sort_order', 'desc');
             $query->orderBy($sortBy, $sortOrder);
 
-            // Pagination
             $perPage = $request->get('per_page', 15);
             $stockOpenings = $query->paginate($perPage);
 
@@ -217,33 +268,6 @@ class StockOpeningController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to retrieve stock opening: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
-    public function destroy($id)
-    {
-        try {
-            $stockOpening = StockOpening::find($id);
-
-            if (!$stockOpening) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Stock opening not found'
-                ], 404);
-            }
-
-            $stockOpening->delete();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Stock opening deleted successfully'
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to delete stock opening: ' . $e->getMessage()
             ], 500);
         }
     }

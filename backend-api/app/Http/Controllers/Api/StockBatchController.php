@@ -336,41 +336,60 @@ class StockBatchController extends Controller
     }
 
     public function byProduct(Request $request)
-    {
-        try {
-            if (!$request->has('product_id')) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Product ID is required'
-                ], 400);
-            }
-
-            $batches = StockBatch::where('product_id', $request->product_id)
-                ->select('stock_batches.*')
-                ->selectRaw('
-                    (SELECT COALESCE(SUM(quantity), 0) 
-                     FROM stock_in 
-                     WHERE stock_in.batch_id = stock_batches.batch_id) -
-                    (SELECT COALESCE(SUM(quantity), 0) 
-                     FROM stock_out 
-                     WHERE stock_out.batch_id = stock_batches.batch_id) as available_stock
-                ')
-                ->havingRaw('available_stock > 0')
-                ->orderBy('expiry_date', 'asc')
-                ->get();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Batches retrieved successfully',
-                'data' => $batches
-            ]);
-        } catch (\Exception $e) {
+{
+    try {
+        if (!$request->filled('product_id')) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to retrieve batches: ' . $e->getMessage()
-            ], 500);
+                'message' => 'Product ID is required'
+            ], 400);
         }
+
+        $productId = (int) $request->product_id;
+
+ $batches = StockBatch::leftJoin('stock_opening', 'stock_opening.batch_id', '=', 'stock_batches.batch_id')
+    ->leftJoin('stock_in', 'stock_in.batch_id', '=', 'stock_batches.batch_id')
+    ->leftJoin('stock_out', 'stock_out.batch_id', '=', 'stock_batches.batch_id')
+    ->where('stock_batches.product_id', $productId)
+    ->groupBy(
+        'stock_batches.batch_id',
+        'stock_batches.batch_number',
+        'stock_batches.product_id',
+        'stock_batches.manufacture_date',
+        'stock_batches.expiry_date',
+        'stock_batches.created_at',
+        'stock_batches.updated_at'
+    )
+    ->select(
+        'stock_batches.*',
+        DB::raw('COALESCE(SUM(stock_opening.quantity), 0) as opening_stock'),
+        DB::raw('COALESCE(SUM(stock_in.quantity), 0) as total_in'),
+        DB::raw('COALESCE(SUM(stock_out.quantity), 0) as total_out'),
+        DB::raw('
+            COALESCE(SUM(stock_opening.quantity), 0)
+            + COALESCE(SUM(stock_in.quantity), 0)
+            - COALESCE(SUM(stock_out.quantity), 0)
+            as available_stock
+        ')
+    )
+    ->orderBy('stock_batches.expiry_date', 'asc')
+    ->get();
+
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Batches retrieved successfully',
+            'data' => $batches
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to retrieve batches: ' . $e->getMessage()
+        ], 500);
     }
+}
+
 
     public function store(Request $request)
     {

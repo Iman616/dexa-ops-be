@@ -15,8 +15,14 @@ class ProductController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Product::query();
+        // ✅ Tambahkan eager loading supplier
+        $query = Product::with('supplier');
 
+        // ✅ Filter by brand
+        if ($request->has('brand')) {
+            $query->where('brand', $request->brand);
+        }
+        
         // Search
         if ($request->has('search')) {
             $query->search($request->search);
@@ -25,6 +31,11 @@ class ProductController extends Controller
         // Filter by category
         if ($request->has('category')) {
             $query->filterByCategory($request->category);
+        }
+
+        // ✅ Filter by supplier
+        if ($request->has('supplier_id')) {
+            $query->where('supplier_id', $request->supplier_id);
         }
 
         // Filter by precursor
@@ -57,7 +68,11 @@ class ProductController extends Controller
             'product_code' => 'required|string|max:100|unique:products,product_code',
             'product_name' => 'required|string|max:255',
             'category' => 'nullable|string|max:100',
+            'brand' => 'required|string|max:200',
             'unit' => 'nullable|string|max:50',
+            'supplier_id' => 'nullable|exists:suppliers,supplier_id', // ✅ Tambahkan validasi
+            'purchase_price' => 'nullable|integer|min:0',              // ✅ Tambahkan validasi
+            'selling_price' => 'nullable|integer|min:0',               // ✅ Tambahkan validasi
             'is_precursor' => 'nullable|boolean',
             'description' => 'nullable|string',
         ]);
@@ -72,6 +87,9 @@ class ProductController extends Controller
 
         try {
             $product = Product::create($request->all());
+            
+            // ✅ Load supplier relationship setelah create
+            $product->load('supplier');
 
             return response()->json([
                 'success' => true,
@@ -92,7 +110,8 @@ class ProductController extends Controller
      */
     public function show($id)
     {
-        $product = Product::with(['stockIns', 'stockBatches'])->find($id);
+        // ✅ Tambahkan 'supplier' ke eager loading
+        $product = Product::with(['supplier', 'stockIns', 'stockBatches'])->find($id);
 
         if (!$product) {
             return response()->json([
@@ -126,7 +145,11 @@ class ProductController extends Controller
             'product_code' => 'sometimes|required|string|max:100|unique:products,product_code,' . $id . ',product_id',
             'product_name' => 'sometimes|required|string|max:255',
             'category' => 'nullable|string|max:100',
+            'brand' => 'sometimes|required|string|max:200',
             'unit' => 'nullable|string|max:50',
+            'supplier_id' => 'nullable|exists:suppliers,supplier_id', // ✅ Tambahkan validasi
+            'purchase_price' => 'nullable|integer|min:0',              // ✅ Tambahkan validasi
+            'selling_price' => 'nullable|integer|min:0',               // ✅ Tambahkan validasi
             'is_precursor' => 'nullable|boolean',
             'description' => 'nullable|string',
         ]);
@@ -141,6 +164,9 @@ class ProductController extends Controller
 
         try {
             $product->update($request->all());
+            
+            // ✅ Load supplier relationship setelah update
+            $product->load('supplier');
 
             return response()->json([
                 'success' => true,
@@ -204,12 +230,27 @@ class ProductController extends Controller
     }
 
     /**
+     * ✅ BARU: Get all unique brands
+     */
+    public function brands()
+    {
+        $brands = Product::select('brand')
+            ->distinct()
+            ->whereNotNull('brand')
+            ->orderBy('brand')
+            ->pluck('brand');
+
+        return response()->json([
+            'success' => true,
+            'data' => $brands
+        ], 200);
+    }
+
+    /**
      * Export products to Excel (optional - requires maatwebsite/excel)
      */
     public function export()
     {
-        // Install: composer require maatwebsite/excel
-        // Implementation akan ditambahkan jika diperlukan
         return response()->json([
             'success' => false,
             'message' => 'Export feature not yet implemented'
@@ -221,8 +262,6 @@ class ProductController extends Controller
      */
     public function import(Request $request)
     {
-        // Install: composer require maatwebsite/excel
-        // Implementation akan ditambahkan jika diperlukan
         return response()->json([
             'success' => false,
             'message' => 'Import feature not yet implemented'

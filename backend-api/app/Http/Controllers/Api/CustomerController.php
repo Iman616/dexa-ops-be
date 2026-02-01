@@ -3,24 +3,25 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Supplier;
+use App\Models\Customer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\DB;
 
-class SupplierController extends Controller
+class CustomerController extends Controller
 {
     /**
-     * Display a listing of suppliers
+     * Display a listing of customers with filters
      */
     public function index(Request $request)
     {
-        $query = Supplier::query();
+        $query = Customer::query();
 
         // Search
         if ($request->has('search')) {
             $search = $request->search;
             $query->where(function($q) use ($search) {
-                $q->where('supplier_name', 'LIKE', "%{$search}%")
+                $q->where('customer_name', 'LIKE', "%{$search}%")
                   ->orWhere('contact_person', 'LIKE', "%{$search}%")
                   ->orWhere('email', 'LIKE', "%{$search}%")
                   ->orWhere('phone', 'LIKE', "%{$search}%");
@@ -28,28 +29,28 @@ class SupplierController extends Controller
         }
 
         // Sorting
-        $sortBy = $request->get('sort_by', 'supplier_id');
+        $sortBy = $request->get('sort_by', 'customer_id');
         $sortOrder = $request->get('sort_order', 'desc');
         $query->orderBy($sortBy, $sortOrder);
 
         // Pagination
         $perPage = $request->get('per_page', 15);
-        $suppliers = $query->paginate($perPage);
+        $customers = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
-            'message' => 'Suppliers retrieved successfully',
-            'data' => $suppliers
+            'message' => 'Customers retrieved successfully',
+            'data' => $customers
         ], 200);
     }
 
     /**
-     * Store a newly created supplier
+     * Store a newly created customer
      */
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'supplier_name' => 'required|string|max:255',
+            'customer_name' => 'required|string|max:255',
             'contact_person' => 'nullable|string|max:255',
             'email' => 'nullable|email|max:255',
             'phone' => 'nullable|string|max:50',
@@ -65,59 +66,71 @@ class SupplierController extends Controller
         }
 
         try {
-            $supplier = Supplier::create($request->all());
+            $customer = Customer::create($request->all());
 
             return response()->json([
                 'success' => true,
-                'message' => 'Supplier created successfully',
-                'data' => $supplier
+                'message' => 'Customer created successfully',
+                'data' => $customer
             ], 201);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to create supplier',
+                'message' => 'Failed to create customer',
                 'error' => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Display the specified supplier
+     * Display the specified customer
      */
     public function show($id)
     {
-        $supplier = Supplier::with(['purchaseOrders'])->find($id);
+        $customer = Customer::find($id);
 
-        if (!$supplier) {
+        if (!$customer) {
             return response()->json([
                 'success' => false,
-                'message' => 'Supplier not found'
+                'message' => 'Customer not found'
             ], 404);
         }
 
+        // Get transaction summary
+        $transactionSummary = DB::table('stock_out')
+            ->where('customer_id', $id)
+            ->select(
+                DB::raw('COUNT(*) as total_transactions'),
+                DB::raw('SUM(quantity) as total_quantity'),
+                DB::raw('SUM(quantity * selling_price) as total_value')
+            )
+            ->first();
+
+        $customer->transaction_summary = $transactionSummary;
+
         return response()->json([
             'success' => true,
-            'message' => 'Supplier retrieved successfully',
-            'data' => $supplier
+            'message' => 'Customer retrieved successfully',
+            'data' => $customer
         ], 200);
     }
 
     /**
-     * Update the specified supplier
+     * Update the specified customer
      */
     public function update(Request $request, $id)
     {
-        $supplier = Supplier::find($id);
+        $customer = Customer::find($id);
 
-        if (!$supplier) {
+        if (!$customer) {
             return response()->json([
                 'success' => false,
-                'message' => 'Supplier not found'
+                'message' => 'Customer not found'
             ], 404);
         }
 
         $validator = Validator::make($request->all(), [
-            'supplier_name' => 'sometimes|required|string|max:255',
+            'customer_name' => 'sometimes|required|string|max:255',
             'contact_person' => 'nullable|string|max:255',
             'email' => 'nullable|email|max:255',
             'phone' => 'nullable|string|max:50',
@@ -133,64 +146,61 @@ class SupplierController extends Controller
         }
 
         try {
-            $supplier->update($request->all());
+            $customer->update($request->all());
 
             return response()->json([
                 'success' => true,
-                'message' => 'Supplier updated successfully',
-                'data' => $supplier
+                'message' => 'Customer updated successfully',
+                'data' => $customer
             ], 200);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to update supplier',
+                'message' => 'Failed to update customer',
                 'error' => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Remove the specified supplier
+     * Remove the specified customer
      */
     public function destroy($id)
     {
-        $supplier = Supplier::find($id);
+        $customer = Customer::find($id);
 
-        if (!$supplier) {
+        if (!$customer) {
             return response()->json([
                 'success' => false,
-                'message' => 'Supplier not found'
+                'message' => 'Customer not found'
             ], 404);
         }
 
+        // Check if customer has transactions
+        $hasTransactions = DB::table('stock_out')
+            ->where('customer_id', $id)
+            ->exists();
+
+        if ($hasTransactions) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot delete customer with existing transactions'
+            ], 400);
+        }
+
         try {
-            $supplier->delete();
+            $customer->delete();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Supplier deleted successfully'
+                'message' => 'Customer deleted successfully'
             ], 200);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to delete supplier',
+                'message' => 'Failed to delete customer',
                 'error' => $e->getMessage()
             ], 500);
         }
-    }
-
-    /**
-     * Get supplier list for dropdown (minimal data)
-     */
-    public function dropdown()
-    {
-        $suppliers = Supplier::select('supplier_id', 'supplier_name')
-            ->orderBy('supplier_name')
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data' => $suppliers
-        ], 200);
     }
 }

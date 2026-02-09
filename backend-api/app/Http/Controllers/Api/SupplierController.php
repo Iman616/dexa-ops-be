@@ -179,6 +179,8 @@ class SupplierController extends Controller
         }
     }
 
+    
+
     /**
      * Get supplier list for dropdown (minimal data)
      */

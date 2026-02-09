@@ -16,14 +16,14 @@ class DeliveryNote extends Model
 
    protected $fillable = [
     'company_id',
-    'invoice_id',            
+    'invoice_id',           
+      'po_id',              // TAMBAHAN
+        'quotation_id', 
     'delivery_note_number',
     'delivery_date',
     'recipient_name',
     'recipient_address',
     'notes',
-
-    // ✅ workflow & signing
     'status',
     'signed_name',
     'signed_position',
@@ -31,7 +31,6 @@ class DeliveryNote extends Model
     'signed_at',
     'issued_by',
     'issued_at',
-
     'created_by',
 ];
 
@@ -83,11 +82,17 @@ protected $casts = [
     return $this->belongsTo(User::class, 'issued_by', 'user_id');
 }
 
+public function purchaseOrder()
+    {
+        return $this->belongsTo(PurchaseOrder::class, 'po_id', 'po_id');
+    }
 
-    /**
-     * ✅ NEW: Delivery notes juga bisa sebagai surat jalan masuk (dari supplier)
-     * Link ke stock_in jika ini surat jalan dari supplier
-     */
+    public function quotation()
+    {
+        return $this->belongsTo(Quotation::class, 'quotation_id', 'quotation_id');
+    }
+
+    // EXISTING METHODS...
     public function stockIns()
     {
         return $this->hasMany(StockIn::class, 'delivery_note_id', 'delivery_note_id');
@@ -177,20 +182,13 @@ protected $casts = [
      * ✅ NEW: Process delivery (create stock OUT via StockOutController)
      */
     public function processDelivery($outDate = null, $notes = null)
-    {
-        // This method should call StockOutController::bulkFromDeliveryNote()
-        // Or implement the FIFO logic here
-        
+    {        
         return [
             'success' => false,
             'message' => 'Use StockOutController::bulkFromDeliveryNote() instead',
             'delivery_note_id' => $this->delivery_note_id
         ];
     }
-
-    /**
-     * ✅ NEW: Check if can create stock OUT
-     */
     public function canCreateStockOut()
     {
         // Tidak bisa create stock OUT jika:
@@ -341,4 +339,58 @@ public function cancelReceived()
         ];
     }
 }
+
+/**
+ * ✅ NEW: Returns dari delivery note ini
+ */
+public function stockReturns()
+{
+    return $this->hasMany(StockReturn::class, 'delivery_note_id', 'delivery_note_id');
+}
+
+/**
+ * ✅ NEW: Check if has returns
+ */
+public function hasReturns()
+{
+    return $this->stockReturns()->exists();
+}
+
+/**
+ * ✅ NEW: Get total returned quantity
+ */
+public function getTotalReturnedQuantity()
+{
+    return $this->stockReturns()
+        ->where('status', 'completed')
+        ->sum('quantity');
+}
+
+/**
+ * ✅ NEW: Create return from this delivery note
+ */
+public function createReturn($itemData, $returnReason, $notes = null)
+{
+    $companyCode = $this->company->company_code;
+    $returnNumber = StockReturn::generateReturnNumber($companyCode, 'customer_return');
+    
+    return StockReturn::create([
+        'company_id' => $this->company_id,
+        'return_type' => 'customer_return',
+        'delivery_note_id' => $this->delivery_note_id,
+        'stock_out_id' => $itemData['stock_out_id'] ?? null,
+        'customer_id' => $this->purchaseOrder->customer_id ?? null,
+        'product_id' => $itemData['product_id'],
+        'batch_id' => $itemData['batch_id'] ?? null,
+        'return_number' => $returnNumber,
+        'return_date' => now(),
+        'quantity' => $itemData['quantity'],
+        'unit' => $itemData['unit'] ?? 'pcs',
+        'return_reason' => $returnReason,
+        'return_notes' => $notes,
+        'return_value' => $itemData['return_value'] ?? 0,
+        'status' => 'draft',
+    ]);
+}
+
 }

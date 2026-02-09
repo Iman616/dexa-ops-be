@@ -272,4 +272,31 @@ class StockOut extends Model
             'has_proof' => $this->hasProof()
         ];
     }
+
+    /**
+ * ✅ NEW: Returns dari stock out ini
+ */
+public function stockReturns()
+{
+    return $this->hasMany(StockReturn::class, 'stock_out_id', 'stock_out_id');
+}
+
+/**
+ * ✅ NEW: Check if has returns
+ */
+public function hasReturns()
+{
+    return $this->stockReturns()->exists();
+}
+
+/**
+ * ✅ NEW: Get total returned quantity
+ */
+public function getTotalReturnedQuantity()
+{
+    return $this->stockReturns()
+        ->where('status', 'completed')
+        ->sum('quantity');
+}
+
 }

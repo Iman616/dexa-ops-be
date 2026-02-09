@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class Quotation extends Model
 {
@@ -14,6 +15,7 @@ class Quotation extends Model
         'company_id',
         'customer_id',
         'quotation_number',
+        'activity_type_id',
         'quotation_date',
         'valid_until',
         'total_amount',
@@ -23,6 +25,7 @@ class Quotation extends Model
         'signed_name',
         'signed_position',
         'signed_city',
+        'signature_image',
         'signed_at',
         'issued_by',
         'issued_at',
@@ -36,7 +39,7 @@ class Quotation extends Model
         'issued_at' => 'datetime',
     ];
 
-    protected $appends = ['is_expired', 'status_label', 'is_issued'];
+    protected $appends = ['is_expired', 'status_label', 'is_issued', 'signature_url'];
 
     /* ================= RELATIONSHIPS ================= */
 
@@ -48,6 +51,12 @@ class Quotation extends Model
     public function customer()
     {
         return $this->belongsTo(Customer::class, 'customer_id', 'customer_id');
+    }
+
+    // ✅ ADDED: Relation to ActivityType
+    public function activityType()
+    {
+        return $this->belongsTo(ActivityType::class, 'activity_type_id', 'activity_type_id');
     }
 
     public function items()
@@ -95,6 +104,14 @@ class Quotation extends Model
         return $this->status === 'issued' && !is_null($this->issued_at);
     }
 
+    public function getSignatureUrlAttribute()
+    {
+        if ($this->signature_image && Storage::disk('public')->exists($this->signature_image)) {
+            return url('storage/' . $this->signature_image);
+        }
+        return null;
+    }
+
     /* ================= SCOPES ================= */
 
     public function scopeByCompany($query, $companyId)
@@ -122,6 +139,12 @@ class Quotation extends Model
         return $query->where('status', 'issued')->whereNotNull('issued_at');
     }
 
+    // ✅ ADDED: Scope by activity type
+    public function scopeByActivityType($query, $activityTypeId)
+    {
+        return $query->where('activity_type_id', $activityTypeId);
+    }
+
     /* ================= METHODS ================= */
 
     public function updateTotalAmount()
@@ -130,21 +153,46 @@ class Quotation extends Model
         $this->update(['total_amount' => $total]);
     }
 
-    /**
-     * Issue quotation dengan tanda tangan
-     */
-    public function issue($signedName, $signedPosition, $signedCity, $issuedBy)
+    public function issue($signedName, $signedPosition, $signedCity, $signatureFile, $issuedBy)
     {
+        if ($this->signature_image && Storage::disk('public')->exists($this->signature_image)) {
+            Storage::disk('public')->delete($this->signature_image);
+        }
+
+        $signaturePath = null;
+        if ($signatureFile) {
+            $filename = 'quotation_' . $this->quotation_id . '_' . time() . '.' . $signatureFile->getClientOriginalExtension();
+            $signaturePath = $signatureFile->storeAs('signatures/quotations', $filename, 'public');
+        }
+
         $this->update([
             'status' => 'issued',
             'signed_name' => $signedName,
             'signed_position' => $signedPosition,
             'signed_city' => $signedCity,
+            'signature_image' => $signaturePath,
             'signed_at' => now(),
             'issued_by' => $issuedBy,
             'issued_at' => now(),
         ]);
 
         return $this;
+    }
+
+    public function deleteSignature()
+    {
+        if ($this->signature_image && Storage::disk('public')->exists($this->signature_image)) {
+            Storage::disk('public')->delete($this->signature_image);
+            $this->update(['signature_image' => null]);
+        }
+    }
+
+    protected static function boot()
+    {
+        parent::boot();
+
+        static::deleting(function ($quotation) {
+            $quotation->deleteSignature();
+        });
     }
 }

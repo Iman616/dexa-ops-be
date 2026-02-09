@@ -76,21 +76,36 @@ class PurchaseOrderPdfService
     }
 
     /**
-     * Prepare data PDF (pakai accessor model biar rapi & cepat)
+     * ✅ PERBAIKAN: Prepare data PDF dengan perhitungan manual
      */
     private function preparePdfData(PurchaseOrder $po)
     {
         $po->load(['company', 'customer', 'items']);
+
+        // ✅ Hitung subtotal dari semua items
+        $subtotal = 0;
+        foreach ($po->items as $item) {
+            $itemSubtotal = $item->quantity * $item->unit_price;
+            $discountAmount = $itemSubtotal * ($item->discount_percent / 100);
+            $itemTotal = $itemSubtotal - $discountAmount;
+            $subtotal += $itemTotal;
+        }
+
+        // ✅ Hitung PPN 11%
+        $ppn = $subtotal * 0.11;
+        
+        // ✅ Grand Total
+        $grand_total = $subtotal + $ppn;
 
         return [
             'po' => $po,
             'company' => $po->company,
             'customer' => $po->customer,
             'items' => $po->items,
-            'subtotal' => $po->subtotal,
-            'ppn' => $po->tax_amount,
+            'subtotal' => $subtotal,      // ✅ Total setelah diskon
+            'ppn' => $ppn,                 // ✅ 11% dari subtotal
             'ppn_percent' => 11,
-            'grand_total' => $po->grand_total,
+            'grand_total' => $grand_total, // ✅ Subtotal + PPN
         ];
     }
 

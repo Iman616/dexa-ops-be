@@ -25,7 +25,7 @@ class PurchaseOrderItem extends Model
     ];
 
     protected $casts = [
-        'quantity' => 'integer',
+        'quantity' => 'decimal:2', // ✅ UBAH dari integer ke decimal
         'unit_price' => 'decimal:2',
         'discount_percent' => 'decimal:2',
     ];
@@ -48,16 +48,23 @@ class PurchaseOrderItem extends Model
 
     public function getSubtotalAttribute()
     {
-        return $this->quantity * $this->unit_price;
+        // ✅ PERBAIKAN: Pastikan nilai numerik
+        $quantity = floatval($this->attributes['quantity'] ?? 0);
+        $unitPrice = floatval($this->attributes['unit_price'] ?? 0);
+        return $quantity * $unitPrice;
     }
 
     public function getDiscountAmountAttribute()
     {
-        return $this->subtotal * ($this->discount_percent / 100);
+        // ✅ PERBAIKAN: Gunakan raw subtotal calculation
+        $subtotal = $this->getSubtotalAttribute();
+        $discountPercent = floatval($this->attributes['discount_percent'] ?? 0);
+        return $subtotal * ($discountPercent / 100);
     }
 
     public function getTotalAttribute()
     {
-        return $this->subtotal - $this->discount_amount;
+        // ✅ PERBAIKAN: Langsung hitung
+        return $this->getSubtotalAttribute() - $this->getDiscountAmountAttribute();
     }
 }

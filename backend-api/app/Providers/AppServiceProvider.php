@@ -1,6 +1,8 @@
 <?php
 
 namespace App\Providers;
+use App\Models\PurchaseOrder;
+use App\Observers\PurchaseOrderObserver;
 
 use Illuminate\Support\ServiceProvider;
 
@@ -19,6 +21,6 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+         PurchaseOrder::observe(PurchaseOrderObserver::class);
     }
 }

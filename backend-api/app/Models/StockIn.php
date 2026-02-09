@@ -11,11 +11,11 @@ class StockIn extends Model
     protected $primaryKey = 'stock_in_id';
 
     protected $fillable = [
-        'company_id',             
+        'company_id',
         'supplier_po_id',
-        'delivery_note_number',    
-        'delivery_note_date',      
-        'delivery_note_file',      
+        'delivery_note_number',
+        'delivery_note_date',
+        'delivery_note_file',
         'product_id',
         'batch_id',
         'quantity',
@@ -23,19 +23,26 @@ class StockIn extends Model
         'received_date',
         'notes',
         'received_by',
+        'receiver_name',          // ✅ NEW
+        'receiver_position',      // ✅ NEW
+        'received_datetime',      // ✅ NEW
     ];
 
     protected $casts = [
+        'company_id' => 'integer',
         'quantity' => 'integer',
         'purchase_price' => 'decimal:2',
         'received_date' => 'date',
-        'delivery_note_date' => 'date',     
+        'delivery_note_date' => 'date',
+        'received_datetime' => 'datetime',  // ✅ NEW
         'received_by' => 'integer',
     ];
 
-    // ✅ Append computed attributes
-    protected $appends = ['total_value', 'has_delivery_note', 'delivery_note_url', 'delivery_note_url']; 
-    
+    protected $appends = [
+        'total_value',
+        'has_delivery_note',
+        'delivery_note_url',
+    ];
 
     /* ================= RELATIONSHIPS ================= */
 
@@ -56,7 +63,7 @@ class StockIn extends Model
 
     public function supplierPo()
     {
-        return $this->belongsTo(SupplierPO::class, 'supplier_po_id', 'supplier_po_id');
+        return $this->belongsTo(SupplierPurchaseOrder::class, 'supplier_po_id', 'supplier_po_id');
     }
 
     public function receivedByUser()
@@ -66,51 +73,34 @@ class StockIn extends Model
 
     /* ================= ACCESSORS ================= */
 
-    /**
-     * Get total value (quantity * purchase_price)
-     */
     public function getTotalValueAttribute()
     {
         return $this->quantity * $this->purchase_price;
     }
 
-    /**
-     * ✅ Check if has delivery note file (FIXED)
-     */
     public function getHasDeliveryNoteAttribute()
     {
         if (empty($this->delivery_note_file)) {
             return false;
         }
-        
-        // ✅ FIX: Specify disk 'public'
         return Storage::disk('public')->exists($this->delivery_note_file);
     }
 
-    /**
-     * ✅ Get delivery note file URL (FIXED)
-     */
-public function getDeliveryNoteUrlAttribute()
-{
-    if (!$this->delivery_note_file) {
+    public function getDeliveryNoteUrlAttribute()
+    {
+        if (!$this->delivery_note_file) {
+            return null;
+        }
+
+        if (Storage::disk('public')->exists($this->delivery_note_file)) {
+            return url(Storage::url($this->delivery_note_file));
+        }
+
         return null;
     }
 
-    if (Storage::disk('public')->exists($this->delivery_note_file)) {
-        return url(Storage::url($this->delivery_note_file));
-    }
-
-    return null;
-}
-
-
-
-
     /* ================= FILE METHODS ================= */
 
-    /**
-     * ✅ Upload delivery note file
-     */
     public function uploadDeliveryNote($file)
     {
         // Delete old file if exists
@@ -119,7 +109,7 @@ public function getDeliveryNoteUrlAttribute()
         // Generate unique filename
         $filename = 'DN_' . $this->stock_in_id . '_' . time() . '.' . $file->getClientOriginalExtension();
 
-        // Store file in storage/app/public/delivery_notes
+        // Store file
         $path = $file->storeAs('delivery_notes', $filename, 'public');
 
         // Update database
@@ -128,9 +118,6 @@ public function getDeliveryNoteUrlAttribute()
         return $path;
     }
 
-    /**
-     * ✅ Delete delivery note file (FIXED)
-     */
     public function deleteDeliveryNote()
     {
         if (!empty($this->delivery_note_file) && Storage::disk('public')->exists($this->delivery_note_file)) {
@@ -138,9 +125,6 @@ public function getDeliveryNoteUrlAttribute()
         }
     }
 
-    /**
-     * ✅ Check if has delivery note (method version)
-     */
     public function hasDeliveryNote()
     {
         return $this->has_delivery_note;
@@ -152,9 +136,51 @@ public function getDeliveryNoteUrlAttribute()
     {
         parent::boot();
 
-        // ✅ Auto-delete file when record is deleted
         static::deleting(function ($stockIn) {
             $stockIn->deleteDeliveryNote();
         });
     }
+
+    /**
+ * ✅ NEW: Returns ke supplier dari stock in ini
+ */
+public function stockReturns()
+{
+    return $this->hasMany(StockReturn::class, 'stock_in_id', 'stock_in_id');
+}
+
+/**
+ * ✅ NEW: Check if has returns
+ */
+public function hasReturns()
+{
+    return $this->stockReturns()->exists();
+}
+
+/**
+ * ✅ NEW: Create return to supplier
+ */
+public function createSupplierReturn($quantity, $returnReason, $notes = null)
+{
+    $companyCode = $this->company->company_code;
+    $returnNumber = StockReturn::generateReturnNumber($companyCode, 'supplier_return');
+    
+    return StockReturn::create([
+        'company_id' => $this->company_id,
+        'return_type' => 'supplier_return',
+        'stock_in_id' => $this->stock_in_id,
+        'supplier_id' => $this->supplierPo->supplier_id ?? null,
+        'product_id' => $this->product_id,
+        'batch_id' => $this->batch_id,
+        'return_number' => $returnNumber,
+        'return_date' => now(),
+        'quantity' => $quantity,
+        'unit' => $this->product->unit,
+        'return_reason' => $returnReason,
+        'return_notes' => $notes,
+        'return_value' => $quantity * $this->purchase_price,
+        'status' => 'draft',
+    ]);
+}
+
 }

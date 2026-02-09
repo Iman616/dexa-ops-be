@@ -80,12 +80,13 @@ class StockMovementController extends Controller
     /**
      * Store a newly created stock movement
      */
-    public function store(Request $request)
+  public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
             'product_id' => 'required|exists:products,product_id',
             'batch_id' => 'required|exists:stock_batches,batch_id',
-            'movement_type' => 'required|in:IN,OUT,ADJUSTMENT,RETURN',
+            // ✅ UPDATE validation untuk include RETURN_IN dan RETURN_OUT
+            'movement_type' => 'required|in:IN,OUT,ADJUSTMENT,RETURN,RETURN_IN,RETURN_OUT',
             'quantity' => 'required|numeric|min:0.01',
             'unit_cost' => 'nullable|numeric|min:0',
             'reference_id' => 'nullable|integer',
@@ -120,9 +121,10 @@ class StockMovementController extends Controller
             // Update batch quantity
             $batch = StockBatch::find($request->batch_id);
             if ($batch) {
-                if (in_array($request->movement_type, ['IN', 'RETURN'])) {
+                // ✅ UPDATE logic untuk handle RETURN_IN dan RETURN_OUT
+                if (in_array($request->movement_type, ['IN', 'RETURN', 'RETURN_IN'])) {
                     $batch->quantity_available += $request->quantity;
-                } elseif (in_array($request->movement_type, ['OUT', 'ADJUSTMENT'])) {
+                } elseif (in_array($request->movement_type, ['OUT', 'ADJUSTMENT', 'RETURN_OUT'])) {
                     $batch->quantity_available -= $request->quantity;
                 }
 
@@ -225,7 +227,7 @@ class StockMovementController extends Controller
     /**
      * Remove the specified stock movement
      */
-    public function destroy($id)
+   public function destroy($id)
     {
         $movement = StockMovement::find($id);
 
@@ -242,9 +244,10 @@ class StockMovementController extends Controller
             // Reverse the quantity in batch before delete
             $batch = $movement->batch;
             if ($batch) {
-                if (in_array($movement->movement_type, ['IN', 'RETURN'])) {
+                // ✅ UPDATE logic untuk reverse RETURN_IN dan RETURN_OUT
+                if (in_array($movement->movement_type, ['IN', 'RETURN', 'RETURN_IN'])) {
                     $batch->quantity_available -= $movement->quantity;
-                } elseif (in_array($movement->movement_type, ['OUT', 'ADJUSTMENT'])) {
+                } elseif (in_array($movement->movement_type, ['OUT', 'ADJUSTMENT', 'RETURN_OUT'])) {
                     $batch->quantity_available += $movement->quantity;
                 }
                 $batch->save();
@@ -268,7 +271,6 @@ class StockMovementController extends Controller
             ], 500);
         }
     }
-
     /**
      * Get stock movement summary by product
      */

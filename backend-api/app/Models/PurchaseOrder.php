@@ -2,45 +2,57 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 class PurchaseOrder extends Model
 {
-    use HasFactory;
-
     protected $table = 'purchase_orders';
     protected $primaryKey = 'po_id';
 
-protected $fillable = [
-    'company_id',
-    'customer_id',
-    'quotation_id',
-    'po_number',
-    'po_date',
-    'po_file_path',
-    'status',
-    'notes',
-    'total_amount', 
-    'signed_name',
-    'signed_position',
-    'signed_city',
-    'signed_at',
-    'created_by',
-    'issued_by',
-    'issued_at',
-];
+    protected $fillable = [
+        'company_id',
+        'customer_id',
+        'quotation_id',
+        'activity_type_id', // ✅ 
+        'po_number',
+        'po_date',
+        'valid_until', 
+        'po_file_path',
+        'po_customer_file_path',
+        'po_customer_uploaded_at',
+        'signature_image',
+        'status',
+        'notes',
+        'total_amount',
+        'signed_name',
+        'signed_position',
+        'signed_city',
+        'signed_at',
+        'created_by',
+        'issued_by',
+        'issued_at',
+    ];
 
-protected $casts = [
-    'po_date' => 'date',
-    'signed_at' => 'datetime',
-    'issued_at' => 'datetime',
-    'total_amount' => 'decimal:2', // TAMBAHKAN INI
-];
+    protected $casts = [
+        'po_date' => 'date',
+        'valid_until' => 'date',
+        'signed_at' => 'datetime',
+        'issued_at' => 'datetime',
+        'po_customer_uploaded_at' => 'datetime',
+        'total_amount' => 'decimal:2',
+    ];
 
-    protected $appends = ['status_label', 'has_po_file', 'is_expired'];
+    protected $appends = [
+        'status_label',
+        'has_po_file',
+        'has_po_customer_file',
+        'is_expired',
+        'signature_url',
+        'po_file_url',
+        'po_customer_file_url',
+        'activity_type_name',
+    ];
 
     /* ================= RELATIONSHIPS ================= */
 
@@ -57,6 +69,11 @@ protected $casts = [
     public function quotation()
     {
         return $this->belongsTo(Quotation::class, 'quotation_id', 'quotation_id');
+    }
+
+    public function activity_type()
+    {
+        return $this->belongsTo(ActivityType::class, 'activity_type_id', 'activity_type_id');
     }
 
     public function items()
@@ -98,85 +115,91 @@ protected $casts = [
 
     public function getHasPoFileAttribute()
     {
-        return !empty($this->po_file_path) && Storage::exists($this->po_file_path);
+        return !empty($this->po_file_path) && Storage::disk('public')->exists($this->po_file_path);
+    }
+
+    public function getHasPoCustomerFileAttribute()
+    {
+        return !empty($this->po_customer_file_path) && Storage::disk('public')->exists($this->po_customer_file_path);
+    }
+
+    public function getSignatureUrlAttribute()
+    {
+        if ($this->signature_image && Storage::disk('public')->exists($this->signature_image)) {
+            return url('storage/' . $this->signature_image);
+        }
+        return null;
     }
 
     public function getPoFileUrlAttribute()
     {
         if ($this->has_po_file) {
-            return Storage::url($this->po_file_path);
+            return url('storage/' . $this->po_file_path);
+        }
+        return null;
+    }
+
+    public function getPoCustomerFileUrlAttribute()
+    {
+        if ($this->has_po_customer_file) {
+            return url('storage/' . $this->po_customer_file_path);
         }
         return null;
     }
 
     public function getIsExpiredAttribute()
     {
-        // PO yang sudah approved, completed, atau cancelled tidak bisa expired
         if (in_array($this->status, ['approved', 'completed', 'cancelled'])) {
             return false;
         }
-        
-        // Check jika ada valid_until (opsional)
-        if (isset($this->attributes['valid_until'])) {
-            return $this->valid_until && $this->valid_until->isPast();
+
+        if (!empty($this->valid_until)) {
+            return now()->greaterThan($this->valid_until);
         }
-        
+
         return false;
     }
 
-    public function getTotalAmountAttribute()
-    {
-        return $this->items->sum(function($item) {
-            return $item->quantity * $item->unit_price * (1 - $item->discount_percent / 100);
-        });
+ public function getActivityTypeNameAttribute()
+{
+    if ($this->activity_type) {                 // relasi di PO
+        return $this->activity_type->type_name;
     }
 
-    public function getSubtotalAttribute()
-    {
-        return $this->total_amount;
+    if ($this->quotation && $this->quotation->activityType) {  // relasi di Quotation
+        return $this->quotation->activityType->type_name;
     }
 
-    public function getTaxAmountAttribute()
-    {
-        // PPN 12%
-        $dpp = $this->subtotal / 1.12;
-        return $dpp * 0.12;
-    }
+    return null;
+}
 
-    public function getGrandTotalAttribute()
-    {
-        return $this->subtotal;
-    }
 
-    /* ================= SCOPES ================= */
-
-    public function scopeByCompany($query, $companyId)
+      // RELATIONSHIP BARU
+    public function deliveryNotes()
     {
-        return $query->where('company_id', $companyId);
-    }
-
-    public function scopeByCustomer($query, $customerId)
-    {
-        return $query->where('customer_id', $customerId);
-    }
-
-    public function scopeByStatus($query, $status)
-    {
-        return $query->where('status', $status);
+        return $this->hasMany(DeliveryNote::class, 'po_id', 'po_id');
     }
 
     /* ================= METHODS ================= */
 
-    /**
-     * Issue purchase order dengan tanda tangan
-     */
-    public function issue($signedName, $signedPosition, $signedCity, $issuedBy)
+    public function issue($signedName, $signedPosition, $signedCity, $signatureFile, $issuedBy)
     {
+        if ($this->signature_image && Storage::disk('public')->exists($this->signature_image)) {
+            Storage::disk('public')->delete($this->signature_image);
+        }
+
+        $signaturePath = null;
+        if ($signatureFile) {
+            $filename = 'po_' . $this->po_id . '_' . time() . '.' . $signatureFile->getClientOriginalExtension();
+            $signaturePath = $signatureFile->storeAs('signatures/purchase_orders', $filename, 'public');
+        }
+
         $this->update([
             'status' => 'issued',
             'signed_name' => $signedName,
             'signed_position' => $signedPosition,
             'signed_city' => $signedCity,
+            'signature_image' => $signaturePath,
             'signed_at' => now(),
             'issued_by' => $issuedBy,
             'issued_at' => now(),
@@ -185,7 +208,13 @@ protected $casts = [
         return $this;
     }
 
-    /* ================= FILE METHODS ================= */
+    public function deleteSignature()
+    {
+        if ($this->signature_image && Storage::disk('public')->exists($this->signature_image)) {
+            Storage::disk('public')->delete($this->signature_image);
+            $this->update(['signature_image' => null]);
+        }
+    }
 
     public function uploadPoFile($file)
     {
@@ -199,16 +228,39 @@ protected $casts = [
     public function deletePoFile()
     {
         if ($this->has_po_file) {
-            Storage::delete($this->po_file_path);
+            Storage::disk('public')->delete($this->po_file_path);
+        }
+    }
+
+    public function uploadPoCustomerFile($file)
+    {
+        $this->deletePoCustomerFile();
+        $filename = 'PO_CUSTOMER_' . $this->po_id . '_' . time() . '.' . $file->getClientOriginalExtension();
+        $path = $file->storeAs('purchase_orders/customer', $filename, 'public');
+        
+        $this->update([
+            'po_customer_file_path' => $path,
+            'po_customer_uploaded_at' => now(),
+        ]);
+        
+        return $path;
+    }
+
+    public function deletePoCustomerFile()
+    {
+        if ($this->has_po_customer_file) {
+            Storage::disk('public')->delete($this->po_customer_file_path);
         }
     }
 
     protected static function boot()
     {
         parent::boot();
-        
+
         static::deleting(function ($po) {
+            $po->deleteSignature();
             $po->deletePoFile();
+            $po->deletePoCustomerFile();
             $po->items()->delete();
         });
     }

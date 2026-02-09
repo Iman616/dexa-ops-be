@@ -28,6 +28,13 @@ use App\Http\Controllers\Api\ProformaInvoiceController;
 use App\Http\Controllers\Api\ProformaInvoicePDFController;
 use App\Http\Controllers\Api\DocumentAttachmentController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\SupplierPurchaseOrderController;
+use App\Http\Controllers\Api\SupplierDeliveryNoteController;
+use App\Http\Controllers\Api\ActivityTypeController;
+use App\Http\Controllers\Api\SupplierInvoiceController;
+use App\Http\Controllers\Api\StockReturnController;
+
+
 
 
 /*
@@ -110,6 +117,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // PDF
         Route::get('/{id}/pdf', [QuotationPDFController::class, 'generate']);
         Route::get('/{id}/pdf/download', [QuotationPDFController::class, 'download']);
+         Route::post('/{id}/convert-to-po', [QuotationController::class, 'convertToPurchaseOrder']);
     });
 
      Route::prefix('dashboard')->group(function () {
@@ -122,24 +130,85 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/weekly-revenue', [DashboardController::class, 'getWeeklyRevenue']);
 });
 
-    // ==================== PURCHASE ORDERS (CUSTOMER) ====================
-    Route::prefix('purchase-orders')->group(function () {
-        Route::get('/', [PurchaseOrderController::class, 'index']);
-        Route::post('/', [PurchaseOrderController::class, 'store']);
-        Route::get('/{id}', [PurchaseOrderController::class, 'show']);
-        Route::put('/{id}', [PurchaseOrderController::class, 'update']);
-        Route::delete('/{id}', [PurchaseOrderController::class, 'destroy']);
-        
-        // Status management
-        Route::post('/{id}/issue', [PurchaseOrderController::class, 'issue']);
-        Route::put('/{id}/status', [PurchaseOrderController::class, 'updateStatus']);
-        
-        // File operations
-        Route::get('/{id}/download', [PurchaseOrderController::class, 'downloadPoFile']);
-        
-        // PDF generation
-        Route::get('/{id}/pdf', [PurchaseOrderController::class, 'generatePdf']);
+  // Supplier Invoices
+    Route::prefix('supplier-invoices')->group(function () {
+        Route::get('/', [SupplierInvoiceController::class, 'indexInvoices']);
+        Route::get('/{id}', [SupplierInvoiceController::class, 'showInvoice']);
+        Route::post('/', [SupplierInvoiceController::class, 'storeInvoice']);
+        Route::put('/{id}', [SupplierInvoiceController::class, 'updateInvoice']);
+        Route::delete('/{id}', [SupplierInvoiceController::class, 'destroyInvoice']);
+        Route::get('/{id}/download', [SupplierInvoiceController::class, 'downloadInvoiceFile']);
     });
+
+    // Supplier Payments
+    Route::prefix('supplier-payments')->group(function () {
+        Route::get('/', [SupplierInvoiceController::class, 'indexPayments']);
+        Route::get('/{id}', [SupplierInvoiceController::class, 'showPayment']);
+        Route::post('/', [SupplierInvoiceController::class, 'storePayment']);
+        Route::post('/{id}/approve', [SupplierInvoiceController::class, 'approvePayment']);
+        Route::post('/{id}/cancel', [SupplierInvoiceController::class, 'cancelPayment']);
+        Route::delete('/{id}', [SupplierInvoiceController::class, 'destroyPayment']);
+        Route::get('/{id}/download-proof', [SupplierInvoiceController::class, 'downloadPaymentProof']);
+    });
+
+
+
+ Route::prefix('purchase-orders')->group(function () {
+    Route::get('/', [PurchaseOrderController::class, 'index']);
+    Route::post('/', [PurchaseOrderController::class, 'store']);
+    Route::get('/{id}', [PurchaseOrderController::class, 'show']);
+    Route::put('/{id}', [PurchaseOrderController::class, 'update']);
+    Route::delete('/{id}', [PurchaseOrderController::class, 'destroy']);
+    
+    Route::patch('/{id}/status', [PurchaseOrderController::class, 'updateStatus']);
+    Route::post('/{id}/issue', [PurchaseOrderController::class, 'issue']);
+    
+    Route::get('/{id}/pdf', [PurchaseOrderController::class, 'generatePdf']);
+    Route::get('/{id}/download-po-file', [PurchaseOrderController::class, 'downloadPoFile']);
+    
+    Route::post('/{id}/upload-po-customer-file', [PurchaseOrderController::class, 'uploadPoCustomerFile']);
+    Route::get('/{id}/download-po-customer-file', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
+});
+
+    Route::prefix('activity-types')->group(function () {
+    Route::get('/', [ActivityTypeController::class, 'index']);
+    Route::post('/', [ActivityTypeController::class, 'store']);
+    Route::get('/{id}', [ActivityTypeController::class, 'show']);
+    Route::put('/{id}', [ActivityTypeController::class, 'update']);
+    Route::delete('/{id}', [ActivityTypeController::class, 'destroy']);
+});
+    
+
+    // ==================== PURCHASE ORDERS (CUSTOMER) ====================
+Route::prefix('purchase-orders')->group(function () {
+    Route::get('/', [PurchaseOrderController::class, 'index']);
+    Route::post('/', [PurchaseOrderController::class, 'store']);
+    Route::get('/{id}', [PurchaseOrderController::class, 'show']);
+    Route::put('/{id}', [PurchaseOrderController::class, 'update']);
+    Route::delete('/{id}', [PurchaseOrderController::class, 'destroy']);
+    Route::post('/{id}/issue', [PurchaseOrderController::class, 'issue']);
+    Route::patch('/{id}/status', [PurchaseOrderController::class, 'updateStatus']);
+    Route::get('/{id}/pdf', [PurchaseOrderController::class, 'generatePdf']);
+    Route::get('/{id}/po-file', [PurchaseOrderController::class, 'downloadPoFile']);
+    
+    // ✅ TAMBAHAN: Upload & Download PO Customer
+    Route::post('/{id}/upload-po-customer', [PurchaseOrderController::class, 'uploadPoCustomerFile']);
+    Route::get('/{id}/po-customer-file', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
+});
+ // ==================== SUPPLIER DELIVERY NOTES (Master Data) ====================
+Route::prefix('supplier-delivery-notes')->middleware('auth:sanctum')->group(function () {
+    Route::get('/', [SupplierDeliveryNoteController::class, 'index']);
+    Route::post('/', [SupplierDeliveryNoteController::class, 'store']);
+    Route::get('/pending', [SupplierDeliveryNoteController::class, 'getPending']);
+    Route::get('/{id}', [SupplierDeliveryNoteController::class, 'show']);
+    Route::put('/{id}', [SupplierDeliveryNoteController::class, 'update']);
+    Route::delete('/{id}', [SupplierDeliveryNoteController::class, 'destroy']);
+    
+    // Actions
+    Route::post('/{id}/receive', [SupplierDeliveryNoteController::class, 'receiveGoods']);
+    Route::post('/{id}/cancel', [SupplierDeliveryNoteController::class, 'cancel']);
+    Route::get('/{id}/download', [SupplierDeliveryNoteController::class, 'downloadFile']);
+});
 
     // ==================== PROFORMA INVOICE ====================
     Route::prefix('proforma-invoices')->group(function () {
@@ -202,6 +271,40 @@ Route::prefix('invoices')->group(function () {
         Route::post('/{id}/generate-receipt', [PaymentController::class, 'generateReceipt']);
     });
 
+    Route::prefix('stock-returns')->group(function () {
+    // CRUD
+    Route::get('/', [StockReturnController::class, 'index']);
+    Route::post('/', [StockReturnController::class, 'store']);
+    Route::get('/{id}', [StockReturnController::class, 'show']);
+    Route::put('/{id}', [StockReturnController::class, 'update']);
+    Route::delete('/{id}', [StockReturnController::class, 'destroy']);
+    
+    // Workflow
+    Route::post('/{id}/submit', [StockReturnController::class, 'submit']);
+    Route::post('/{id}/approve', [StockReturnController::class, 'approve']);
+    Route::post('/{id}/reject', [StockReturnController::class, 'reject']);
+    Route::post('/{id}/process', [StockReturnController::class, 'process']);
+    Route::post('/{id}/cancel', [StockReturnController::class, 'cancel']);
+    
+    // Create from existing records
+    Route::post('/from-delivery-note/{delivery_note_id}', [StockReturnController::class, 'createFromDeliveryNote']);
+    Route::post('/from-stock-in/{stock_in_id}', [StockReturnController::class, 'createFromStockIn']);
+    
+    // Proof file management
+    Route::post('/{id}/upload-proof', [StockReturnController::class, 'uploadProof']);
+    Route::get('/{id}/download-proof', [StockReturnController::class, 'downloadProof']);
+    Route::delete('/{id}/proof', [StockReturnController::class, 'deleteProof']);
+    
+    // Query helpers
+    Route::get('/by-delivery-note/{delivery_note_id}', [StockReturnController::class, 'getByDeliveryNote']);
+    Route::get('/by-stock-out/{stock_out_id}', [StockReturnController::class, 'getByStockOut']);
+    Route::get('/by-stock-in/{stock_in_id}', [StockReturnController::class, 'getByStockIn']);
+    
+    // Reports & Utilities
+    Route::get('/summary', [StockReturnController::class, 'summary']);
+    Route::get('/generate-number', [StockReturnController::class, 'generateNumber']);
+});
+
 
     // ==================== RECEIPTS ====================
 Route::prefix('receipts')->group(function () {
@@ -217,25 +320,22 @@ Route::prefix('receipts')->group(function () {
     // ✅ ADD: Download PDF
     Route::get('/{id}/pdf', [ReceiptController::class, 'downloadPdf']);
 });
-
     // ==================== DELIVERY NOTES ====================
-    Route::prefix('delivery-notes')->group(function () {
+     Route::prefix('delivery-notes')->group(function () {
         Route::get('/', [DeliveryNoteController::class, 'index']);
         Route::post('/', [DeliveryNoteController::class, 'store']);
         Route::get('/{id}', [DeliveryNoteController::class, 'show']);
         Route::put('/{id}', [DeliveryNoteController::class, 'update']);
         Route::delete('/{id}', [DeliveryNoteController::class, 'destroy']);
-        
-        // Actions
         Route::post('/{id}/issue', [DeliveryNoteController::class, 'issue']);
-        Route::post('/{id}/mark-received', [DeliveryNoteController::class, 'markAsReceived']);
-        
-        // Lookup
-        Route::get('/number/{number}', [DeliveryNoteController::class, 'getByNumber']);
-        
-        // PDF
         Route::get('/{id}/pdf', [DeliveryNoteController::class, 'generatePDF']);
+        Route::post('/from-po/{po_id}', [DeliveryNoteController::class, 'createFromPurchaseOrder']);
+        Route::get('/by-number/{delivery_note_number}', [DeliveryNoteController::class, 'getByNumber']);
+        Route::get('/by-po/{po_id}', [DeliveryNoteController::class, 'getByPurchaseOrder']);
+        Route::get('/by-quotation/{quotation_id}', [DeliveryNoteController::class, 'getByQuotation']);
+        Route::get('/generate-number/{company_id}', [DeliveryNoteController::class, 'generateNumber']);
     });
+    
 
     // ==================== STOCK MOVEMENTS ====================
     Route::prefix('stock-movements')->group(function () {

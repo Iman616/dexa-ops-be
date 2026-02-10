@@ -41,14 +41,17 @@ class Company extends Model
     /**
      * Users yang bisa akses company ini
      */
-    public function users()
+ 
+
+      public function users()
     {
         return $this->belongsToMany(
             User::class,
             'user_companies',
             'company_id',
             'user_id'
-        )->withPivot('is_default');
+        )->withPivot('is_default')
+          ->withTimestamps();
     }
 
     /**

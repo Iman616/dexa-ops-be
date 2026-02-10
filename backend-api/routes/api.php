@@ -30,9 +30,18 @@ use App\Http\Controllers\Api\DocumentAttachmentController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\SupplierPurchaseOrderController;
 use App\Http\Controllers\Api\SupplierDeliveryNoteController;
+use App\Http\Controllers\Api\TaxInvoiceController;
+
+use App\Http\Controllers\Api\InternalNotificationController;
+
+use App\Http\Controllers\Api\TenderDocumentController;
+
 use App\Http\Controllers\Api\ActivityTypeController;
 use App\Http\Controllers\Api\SupplierInvoiceController;
 use App\Http\Controllers\Api\StockReturnController;
+use App\Http\Controllers\Api\AgentPaymentController;
+
+use App\Http\Controllers\Api\TenderProjectDetailController;
 
 
 
@@ -66,8 +75,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Auth
     Route::prefix('auth')->group(function () {
         Route::get('/me', [AuthController::class, 'me']);
-        Route::post('/logout', [AuthController::class, 'logout']);
-    });
+    Route::post('/logout', [AuthController::class, 'logout']);
+    Route::post('/switch-company', [AuthController::class, 'switchCompany']); // ⭐ NEW
+});
 
     // ==================== COMPANY ROUTES ====================
     Route::apiResource('companies', CompanyController::class);
@@ -130,6 +140,21 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/weekly-revenue', [DashboardController::class, 'getWeeklyRevenue']);
 });
 
+Route::prefix('internal-notifications')->middleware(['auth:sanctum'])->group(function () {
+    Route::get('/', [InternalNotificationController::class, 'index']);
+    Route::post('/mark-all-read', [InternalNotificationController::class, 'markAllAsRead']);
+    Route::post('/{notification}/read', [InternalNotificationController::class, 'markAsRead']);
+});
+
+Route::prefix('tender-project-details')->middleware('auth:sanctum')->group(function () {
+    Route::get('/', [TenderProjectDetailController::class, 'index']);
+    Route::get('/statistics', [TenderProjectDetailController::class, 'statistics']);
+    Route::post('/from-po/{po_id}', [TenderProjectDetailController::class, 'storeFromPO']);
+    Route::get('/by-po/{po_id}', [TenderProjectDetailController::class, 'showByPO']);
+    Route::get('/{id}', [TenderProjectDetailController::class, 'show']);
+    Route::put('/{id}', [TenderProjectDetailController::class, 'update']);
+});
+
   // Supplier Invoices
     Route::prefix('supplier-invoices')->group(function () {
         Route::get('/', [SupplierInvoiceController::class, 'indexInvoices']);
@@ -168,6 +193,40 @@ Route::middleware('auth:sanctum')->group(function () {
     
     Route::post('/{id}/upload-po-customer-file', [PurchaseOrderController::class, 'uploadPoCustomerFile']);
     Route::get('/{id}/download-po-customer-file', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
+});
+
+Route::prefix('tender-documents')->middleware(['auth:sanctum'])->group(function () {
+    Route::get('/', [TenderDocumentController::class, 'index']);
+    Route::post('/', [TenderDocumentController::class, 'store']);
+    Route::get('/by-po/{po_id}', [TenderDocumentController::class, 'getByPO']);
+    Route::get('/statistics', [TenderDocumentController::class, 'statistics']);
+    Route::get('/progress/{po_id}', [TenderDocumentController::class, 'progress']);
+    Route::get('/{document}', [TenderDocumentController::class, 'show']);
+    Route::put('/{document}', [TenderDocumentController::class, 'update']);
+    Route::delete('/{document}', [TenderDocumentController::class, 'destroy']);
+    
+    // Actions
+    Route::post('/{document}/submit', [TenderDocumentController::class, 'submit']);
+    Route::post('/{document}/verify', [TenderDocumentController::class, 'verify']);
+    Route::post('/{document}/approve', [TenderDocumentController::class, 'approve']);
+    Route::post('/{document}/reject', [TenderDocumentController::class, 'reject']);
+    Route::get('/{document}/download', [TenderDocumentController::class, 'download']);
+});
+
+
+
+Route::prefix('agent-payments')->middleware(['auth:sanctum'])->group(function () {
+    Route::get('/', [AgentPaymentController::class, 'index']);
+    Route::post('/', [AgentPaymentController::class, 'store']);
+    Route::post('/from-supplier-po/{supplier_po_id}', [AgentPaymentController::class, 'storeFromSupplierPO']);
+    Route::get('/statistics', [AgentPaymentController::class, 'statistics']);
+    Route::get('/{agent_payment}', [AgentPaymentController::class, 'show']);
+    Route::put('/{agent_payment}', [AgentPaymentController::class, 'update']);
+    Route::delete('/{agent_payment}', [AgentPaymentController::class, 'destroy']);
+
+    // Payment & files
+    Route::post('/{agent_payment}/pay', [AgentPaymentController::class, 'recordPayment']);
+    Route::post('/{agent_payment}/upload-invoice', [AgentPaymentController::class, 'uploadAgentInvoice']);
 });
 
     Route::prefix('activity-types')->group(function () {
@@ -250,6 +309,21 @@ Route::prefix('invoices')->group(function () {
     // ✅ Delivery Note - Support BOTH singular & plural
     Route::post('/{id}/delivery-note', [InvoiceController::class, 'createDeliveryNote']);
     Route::post('/{id}/delivery-notes', [InvoiceController::class, 'createDeliveryNote']);
+});
+
+Route::prefix('tax-invoices')->middleware(['auth:sanctum'])->group(function () {
+    Route::get('/', [TaxInvoiceController::class, 'index']);
+    Route::post('/', [TaxInvoiceController::class, 'store']);
+    Route::get('/statistics', [TaxInvoiceController::class, 'statistics']);
+    Route::get('/{tax_invoice}', [TaxInvoiceController::class, 'show']);
+    Route::put('/{tax_invoice}', [TaxInvoiceController::class, 'update']);
+    Route::delete('/{tax_invoice}', [TaxInvoiceController::class, 'destroy']);
+    
+    // Actions
+    Route::post('/{tax_invoice}/submit', [TaxInvoiceController::class, 'submit']);
+    Route::post('/{tax_invoice}/approve', [TaxInvoiceController::class, 'approve']);
+    Route::post('/{tax_invoice}/reject', [TaxInvoiceController::class, 'reject']);
+    Route::get('/{tax_invoice}/download', [TaxInvoiceController::class, 'download']);
 });
 
 

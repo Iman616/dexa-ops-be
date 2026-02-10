@@ -21,13 +21,12 @@ class User extends Authenticatable
         'full_name',
         'role_id',
         'phone',
+        'default_company_id', // ⭐ BARU
         'is_active',
         'last_login'
     ];
 
-    protected $hidden = [
-        'password',
-    ];
+    protected $hidden = ['password'];
 
     protected $casts = [
         'is_active' => 'boolean',
@@ -36,11 +35,35 @@ class User extends Authenticatable
         'updated_at' => 'datetime',
     ];
 
-    // =============== EXISTING RELATIONSHIPS ===============
+    /* ================= RELATIONSHIPS ================= */
     
     public function role()
     {
         return $this->belongsTo(Role::class, 'role_id', 'role_id');
+    }
+
+    /**
+     * ⭐ Companies yang bisa diakses user (Many-to-Many via user_companies)
+     */
+    public function companies()
+    {
+        return $this->belongsToMany(
+            Company::class,
+            'user_companies',
+            'user_id',
+            'company_id',
+            'user_id',
+            'company_id'
+        )->withPivot('is_default')
+          ->withTimestamps();
+    }
+
+    /**
+     * ⭐ Default company user
+     */
+    public function defaultCompany()
+    {
+        return $this->belongsTo(Company::class, 'default_company_id', 'company_id');
     }
 
     public function sessions()
@@ -53,13 +76,12 @@ class User extends Authenticatable
         return $this->hasMany(ActivityLog::class, 'user_id', 'user_id');
     }
 
-    // ✅ BARU: Relasi untuk Stock Out
     public function processedStockOuts()
     {
         return $this->hasMany(StockOut::class, 'processed_by', 'user_id');
     }
 
-    // =============== SCOPES ===============
+    /* ================= SCOPES ================= */
 
     public function scopeActive($query)
     {
@@ -75,10 +97,78 @@ class User extends Authenticatable
         });
     }
 
-    // =============== ACCESSORS ===============
+    /* ================= ACCESSORS ================= */
 
     public function getDisplayNameAttribute()
     {
         return $this->full_name ?: $this->username;
+    }
+
+    /**
+     * ⭐ Get list companies untuk frontend
+     */
+    public function getAccessibleCompaniesAttribute()
+    {
+        return $this->companies->map(function($company) {
+            return [
+                'company_id' => $company->company_id,
+                'company_code' => $company->company_code,
+                'company_name' => $company->company_name,
+                'is_default' => $this->default_company_id == $company->company_id,
+            ];
+        });
+    }
+
+    /* ================= METHODS ================= */
+
+    /**
+     * ⭐ Check apakah user punya akses ke company
+     */
+    public function hasAccessToCompany($companyId)
+    {
+        return $this->companies()->where('company_id', $companyId)->exists();
+    }
+
+    /**
+     * ⭐ Switch ke company lain
+     */
+    public function switchToCompany($companyId)
+    {
+        if (!$this->hasAccessToCompany($companyId)) {
+            throw new \Exception('User does not have access to this company');
+        }
+
+        $this->update(['default_company_id' => $companyId]);
+        return $this;
+    }
+
+    /**
+     * ⭐ Assign multiple companies ke user
+     */
+    public function assignCompanies(array $companyIds)
+    {
+        $this->companies()->sync($companyIds);
+    }
+
+    /**
+     * ⭐ Add 1 company
+     */
+    public function addCompany($companyId)
+    {
+        if (!$this->hasAccessToCompany($companyId)) {
+            $this->companies()->attach($companyId);
+        }
+    }
+
+    /**
+     * ⭐ Remove company
+     */
+    public function removeCompany($companyId)
+    {
+        $this->companies()->detach($companyId);
+        
+        if ($this->default_company_id == $companyId) {
+            $this->update(['default_company_id' => null]);
+        }
     }
 }

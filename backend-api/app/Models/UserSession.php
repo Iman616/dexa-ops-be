@@ -16,6 +16,7 @@ class UserSession extends Model
     protected $fillable = [
         'user_id',
         'session_token',
+        'selected_company_id', // ⭐ BARU
         'ip_address',
         'user_agent',
         'login_at',
@@ -29,8 +30,28 @@ class UserSession extends Model
         'logout_at' => 'datetime',
     ];
 
+    /* ================= RELATIONSHIPS ================= */
+
     public function user()
     {
         return $this->belongsTo(User::class, 'user_id', 'user_id');
+    }
+
+    /**
+     * ⭐ Selected company dalam session
+     */
+    public function selectedCompany()
+    {
+        return $this->belongsTo(Company::class, 'selected_company_id', 'company_id');
+    }
+
+    /* ================= METHODS ================= */
+
+    /**
+     * ⭐ Switch company dalam session
+     */
+    public function switchCompany($companyId)
+    {
+        $this->update(['selected_company_id' => $companyId]);
     }
 }

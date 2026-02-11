@@ -10,6 +10,7 @@ use App\Models\Company;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Log;
 
 class AuthController extends Controller
 {
@@ -41,7 +42,7 @@ class AuthController extends Controller
                 'username' => $request->username,
                 'password' => Hash::make($request->password),
                 'phone' => $request->phone,
-                'role_id' => 5, // Default: Viewer role
+                'role_id' => 3, // Default: role ID 3
                 'is_active' => true,
             ]);
 
@@ -66,6 +67,7 @@ class AuthController extends Controller
                 ]
             ], 201);
         } catch (\Exception $e) {
+            Log::error('Registration error: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Registration failed',
@@ -74,28 +76,27 @@ class AuthController extends Controller
         }
     }
 
-    /**
-     * ⭐ Login user (dengan multi-company)
-     */
-    public function login(Request $request)
-    {
-        $validator = Validator::make($request->all(), [
-            'username' => 'required|string',
-            'password' => 'required|string',
-        ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation error',
-                'errors' => $validator->errors()
-            ], 422);
-        }
+public function login(Request $request)
+{
+    $validator = Validator::make($request->all(), [
+        'username' => 'required|string',
+        'password' => 'required|string',
+    ]);
 
-        // Load user dengan companies
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Validation error',
+            'errors' => $validator->errors()
+        ], 422);
+    }
+
+    try {
+        // ✅ Load user dengan eager loading
         $user = User::where('username', $request->username)
                     ->orWhere('email', $request->username)
-                    ->with(['role', 'companies', 'defaultCompany'])
+                    ->with(['role.permissions.menu', 'companies', 'defaultCompany'])
                     ->first();
 
         if (!$user || !Hash::check($request->password, $user->password)) {
@@ -112,8 +113,22 @@ class AuthController extends Controller
             ], 403);
         }
 
+        // ✅ Get ALL active companies (FIX: Qualify ambiguous columns)
+        if ($user->role_id === 1) {
+            // Super Admin: semua companies
+            $companies = Company::where('companies.is_active', true) // ✅ Qualify table name
+                ->orderBy('companies.company_code')
+                ->get(['companies.company_id', 'companies.company_code', 'companies.company_name']);
+        } else {
+            // Normal user: hanya yang di-assign
+            $companies = $user->companies()
+                ->where('companies.is_active', true) // ✅ Qualify table name
+                ->orderBy('companies.company_code')
+                ->get(['companies.company_id', 'companies.company_code', 'companies.company_name']);
+        }
+
         // ⭐ Validasi: user harus punya minimal 1 company
-        if ($user->companies->isEmpty()) {
+        if ($companies->isEmpty()) {
             return response()->json([
                 'success' => false,
                 'message' => 'User belum di-assign ke company. Hubungi admin.',
@@ -121,12 +136,20 @@ class AuthController extends Controller
         }
 
         // ⭐ Tentukan company yang dipilih
-        $selectedCompanyId = $user->default_company_id ?? $user->companies->first()->company_id;
-        $selectedCompany = Company::find($selectedCompanyId);
+        $selectedCompany = null;
+        
+        if ($user->default_company_id) {
+            $selectedCompany = $companies->firstWhere('company_id', $user->default_company_id);
+        }
+        
+        if (!$selectedCompany) {
+            // Fallback: pilih yang pertama
+            $selectedCompany = $companies->first();
+        }
 
         // Update default_company_id jika belum set
-        if (!$user->default_company_id) {
-            $user->update(['default_company_id' => $selectedCompanyId]);
+        if (!$user->default_company_id && $selectedCompany) {
+            $user->update(['default_company_id' => $selectedCompany->company_id]);
         }
 
         // Create token
@@ -135,11 +158,14 @@ class AuthController extends Controller
         // Update last login
         $user->update(['last_login' => now()]);
 
-        // ⭐ Create session dengan selected_company_id
+        // ✅ Get permissions
+        $permissions = $user->permissions;
+
+        // ⭐ Create session
         UserSession::create([
             'user_id' => $user->user_id,
             'session_token' => $token,
-            'selected_company_id' => $selectedCompanyId,
+            'selected_company_id' => $selectedCompany->company_id,
             'ip_address' => $request->ip(),
             'user_agent' => $request->userAgent(),
             'is_active' => true,
@@ -155,6 +181,22 @@ class AuthController extends Controller
             'ip_address' => $request->ip()
         ]);
 
+        // ✅ Format companies response
+        $companiesFormatted = $companies->map(function($company) {
+            return [
+                'company_id' => $company->company_id,
+                'company_code' => $company->company_code,
+                'company_name' => $company->company_name,
+            ];
+        })->values();
+
+        Log::info('Login successful', [
+            'user_id' => $user->user_id,
+            'username' => $user->username,
+            'companies_count' => $companies->count(),
+            'selected_company_id' => $selectedCompany->company_id,
+        ]);
+
         return response()->json([
             'success' => true,
             'message' => 'Login successful',
@@ -165,14 +207,16 @@ class AuthController extends Controller
                     'email' => $user->email,
                     'full_name' => $user->full_name,
                     'phone' => $user->phone,
-                    'role' => $user->role->role_name,
+                    'role_id' => $user->role_id,
+                    'role_name' => $user->role->role_name,
+                    'company_id' => $selectedCompany->company_id,
+                    'company_name' => $selectedCompany->company_name,
                     'last_login' => $user->last_login,
                 ],
                 'token' => $token,
                 'token_type' => 'Bearer',
-                // ⭐ List companies
-                'companies' => $user->accessible_companies,
-                // ⭐ Selected company
+                'permissions' => $permissions,
+                'companies' => $companiesFormatted,
                 'selected_company' => [
                     'company_id' => $selectedCompany->company_id,
                     'company_code' => $selectedCompany->company_code,
@@ -180,7 +224,19 @@ class AuthController extends Controller
                 ],
             ]
         ], 200);
+
+    } catch (\Exception $e) {
+        Log::error('Login error: ' . $e->getMessage(), [
+            'trace' => $e->getTraceAsString()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Login failed',
+            'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
+        ], 500);
     }
+}
 
     /**
      * ⭐ Switch company
@@ -199,55 +255,91 @@ class AuthController extends Controller
             ], 422);
         }
 
-        $user = $request->user();
+        try {
+            $user = $request->user();
+            $companyId = $request->company_id;
 
-        // Validasi akses
-        if (!$user->hasAccessToCompany($request->company_id)) {
+            // ✅ Validasi akses (Super Admin bypass)
+            if ($user->role_id !== 1 && !$user->hasAccessToCompany($companyId)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Anda tidak memiliki akses ke company ini'
+                ], 403);
+            }
+
+            // Update default company user
+            $user->update(['default_company_id' => $companyId]);
+
+            // Update session
+            $token = $request->bearerToken();
+            UserSession::where('session_token', $token)
+                       ->where('user_id', $user->user_id)
+                       ->update(['selected_company_id' => $companyId]);
+
+            $company = Company::find($companyId);
+
+            // Log activity
+            ActivityLog::create([
+                'user_id' => $user->user_id,
+                'action' => 'switch_company',
+                'module' => 'auth',
+                'description' => "Switched to company: {$company->company_name}",
+                'ip_address' => $request->ip()
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Berhasil beralih ke {$company->company_name}",
+                'data' => [
+                    'selected_company' => [
+                        'company_id' => $company->company_id,
+                        'company_code' => $company->company_code,
+                        'company_name' => $company->company_name,
+                        'is_default' => (bool) $company->is_default,
+                    ],
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            Log::error('Switch company error: ' . $e->getMessage());
+
             return response()->json([
                 'success' => false,
-                'message' => 'Anda tidak memiliki akses ke company ini'
-            ], 403);
+                'message' => 'Failed to switch company',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
+            ], 500);
         }
-
-        // Update default company user
-        $user->switchToCompany($request->company_id);
-
-        // Update session
-        $token = $request->bearerToken();
-        UserSession::where('session_token', $token)
-                   ->where('user_id', $user->user_id)
-                   ->update(['selected_company_id' => $request->company_id]);
-
-        $company = Company::find($request->company_id);
-
-        // Log activity
-        ActivityLog::create([
-            'user_id' => $user->user_id,
-            'action' => 'switch_company',
-            'module' => 'auth',
-            'description' => "Switched to company: {$company->company_name}",
-            'ip_address' => $request->ip()
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => "Berhasil beralih ke {$company->company_name}",
-            'data' => [
-                'selected_company' => [
-                    'company_id' => $company->company_id,
-                    'company_code' => $company->company_code,
-                    'company_name' => $company->company_name,
-                ],
-            ]
-        ], 200);
     }
 
-    /**
-     * ⭐ Get authenticated user (dengan companies)
-     */
-    public function me(Request $request)
-    {
-        $user = $request->user()->load(['role', 'companies', 'defaultCompany']);
+/**
+ * ⭐ Get authenticated user (dengan permissions)
+ */
+public function me(Request $request)
+{
+    try {
+        $user = $request->user()->load(['role.permissions.menu', 'companies', 'defaultCompany']);
+
+        // ✅ Get companies (FIX: Qualify ambiguous columns)
+        if ($user->role_id === 1) {
+            $companies = Company::where('companies.is_active', true)
+                ->orderBy('companies.company_code')
+                ->get(['companies.company_id', 'companies.company_code', 'companies.company_name']);
+        } else {
+            $companies = $user->companies()
+                ->where('companies.is_active', true)
+                ->orderBy('companies.company_code')
+                ->get(['companies.company_id', 'companies.company_code', 'companies.company_name']);
+        }
+
+        $companiesFormatted = $companies->map(function($company) {
+            return [
+                'company_id' => $company->company_id,
+                'company_code' => $company->company_code,
+                'company_name' => $company->company_name,
+            ];
+        })->values();
+
+        $permissions = $user->permissions;
 
         return response()->json([
             'success' => true,
@@ -258,11 +350,15 @@ class AuthController extends Controller
                     'email' => $user->email,
                     'full_name' => $user->full_name,
                     'phone' => $user->phone,
-                    'role' => $user->role->role_name,
+                    'role_id' => $user->role_id,
+                    'role_name' => $user->role->role_name,
+                    'company_id' => $user->default_company_id,
+                    'company_name' => $user->defaultCompany?->company_name,
                     'is_active' => $user->is_active,
                     'last_login' => $user->last_login,
                 ],
-                'companies' => $user->accessible_companies,
+                'permissions' => $permissions,
+                'companies' => $companiesFormatted,
                 'selected_company' => $user->defaultCompany ? [
                     'company_id' => $user->defaultCompany->company_id,
                     'company_code' => $user->defaultCompany->company_code,
@@ -270,38 +366,58 @@ class AuthController extends Controller
                 ] : null,
             ]
         ], 200);
+
+    } catch (\Exception $e) {
+        Log::error('Get user info error: ' . $e->getMessage());
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to get user info',
+            'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
+        ], 500);
     }
+}
 
     /**
      * Logout user
      */
     public function logout(Request $request)
     {
-        $user = $request->user();
+        try {
+            $user = $request->user();
 
-        // Deactivate session
-        UserSession::where('user_id', $user->user_id)
-                   ->where('is_active', true)
-                   ->update([
-                       'logout_at' => now(),
-                       'is_active' => false
-                   ]);
+            // Deactivate session
+            UserSession::where('user_id', $user->user_id)
+                       ->where('is_active', true)
+                       ->update([
+                           'logout_at' => now(),
+                           'is_active' => false
+                       ]);
 
-        // Log activity
-        ActivityLog::create([
-            'user_id' => $user->user_id,
-            'action' => 'logout',
-            'module' => 'auth',
-            'description' => 'User logged out: ' . $user->username,
-            'ip_address' => $request->ip()
-        ]);
+            // Log activity
+            ActivityLog::create([
+                'user_id' => $user->user_id,
+                'action' => 'logout',
+                'module' => 'auth',
+                'description' => 'User logged out: ' . $user->username,
+                'ip_address' => $request->ip()
+            ]);
 
-        // Revoke token
-        $request->user()->currentAccessToken()->delete();
+            // Revoke token
+            $request->user()->currentAccessToken()->delete();
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Logout successful'
-        ], 200);
+            return response()->json([
+                'success' => true,
+                'message' => 'Logout successful'
+            ], 200);
+
+        } catch (\Exception $e) {
+            Log::error('Logout error: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Logout failed',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
+            ], 500);
+        }
     }
 }

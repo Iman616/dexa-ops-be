@@ -54,9 +54,11 @@ class User extends Authenticatable
             'company_id',
             'user_id',
             'company_id'
-        )->withPivot('is_default')
-          ->withTimestamps();
-    }
+       )
+    ->withPivot('is_default', 'created_at', 'updated_at')
+    ->withTimestamps()
+    ->select(['companies.company_id', 'companies.company_code', 'companies.company_name']); // ✅ Qualify here
+}
 
     /**
      * ⭐ Default company user
@@ -119,6 +121,32 @@ class User extends Authenticatable
         });
     }
 
+      public function hasPermission(string $menuKey, string $action = 'read'): bool
+    {
+        return $this->role->hasPermission($menuKey, $action);
+    }
+
+    /**
+     * ✅ Get all user permissions
+     */
+    public function getPermissionsAttribute()
+    {
+        return $this->role->permissions()
+            ->with('menu')
+            ->get()
+            ->map(function ($permission) {
+                return [
+                    'menu_id' => $permission->menu_id,
+                    'menu_key' => $permission->menu->menu_key,
+                    'menu_name' => $permission->menu->menu_name,
+                    'can_create' => $permission->can_create,
+                    'can_read' => $permission->can_read,
+                    'can_update' => $permission->can_update,
+                    'can_delete' => $permission->can_delete,
+                ];
+            });
+    }
+
     /* ================= METHODS ================= */
 
     /**
@@ -171,4 +199,6 @@ class User extends Authenticatable
             $this->update(['default_company_id' => null]);
         }
     }
+
+    
 }

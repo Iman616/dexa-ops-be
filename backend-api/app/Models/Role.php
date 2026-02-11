@@ -2,45 +2,66 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class Role extends Model
 {
-    use HasFactory;
-    
     protected $table = 'roles';
     protected $primaryKey = 'role_id';
-    public $timestamps = false;
-    
+
     protected $fillable = [
         'role_name',
-        'description'
+        'description',
+        'is_active',
     ];
-    
+
     protected $casts = [
-        'created_at' => 'datetime',
+        'is_active' => 'boolean',
     ];
-    
-    // Relationships
+
+    /* ================= RELATIONSHIPS ================= */
+
+    /**
+     * Users dengan role ini
+     */
     public function users()
     {
         return $this->hasMany(User::class, 'role_id', 'role_id');
     }
 
-    // ✅ Scopes
-    public function scopeSearch($query, $search)
+    /**
+     * ✅ Permissions untuk role ini
+     */
+    public function permissions()
     {
-        return $query->where(function($q) use ($search) {
-            $q->where('role_name', 'LIKE', "%{$search}%")
-              ->orWhere('description', 'LIKE', "%{$search}%");
-        });
+        return $this->hasMany(RolePermission::class, 'role_id', 'role_id');
     }
 
-    public function scopeWithActiveUsers($query)
+    /* ================= HELPER METHODS ================= */
+
+    /**
+     * Check if role has permission for specific menu & action
+     */
+    public function hasPermission(string $menuKey, string $action = 'read'): bool
     {
-        return $query->withCount(['users' => function($q) {
-            $q->where('is_active', true);
-        }]);
+        return $this->permissions()
+            ->whereHas('menu', function ($query) use ($menuKey) {
+                $query->where('menu_key', $menuKey);
+            })
+            ->where("can_{$action}", true)
+            ->exists();
+    }
+
+    /**
+     * Get all accessible menu keys for this role
+     */
+    public function getAccessibleMenusAttribute()
+    {
+        return $this->permissions()
+            ->where('can_read', true)
+            ->with('menu')
+            ->get()
+            ->pluck('menu.menu_key')
+            ->toArray();
     }
 }

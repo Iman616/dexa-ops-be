@@ -14,7 +14,7 @@ class PurchaseOrder extends Model
         'company_id',
         'customer_id',
         'quotation_id',
-        'activity_type_id', // ✅ 
+        'activity_type_id',
         'po_number',
         'po_date',
         'valid_until', 
@@ -52,6 +52,7 @@ class PurchaseOrder extends Model
         'po_file_url',
         'po_customer_file_url',
         'activity_type_name',
+        'is_tender', // ✅ NEW
     ];
 
     /* ================= RELATIONSHIPS ================= */
@@ -71,9 +72,15 @@ class PurchaseOrder extends Model
         return $this->belongsTo(Quotation::class, 'quotation_id', 'quotation_id');
     }
 
-    public function activity_type()
+    public function activityType()
     {
         return $this->belongsTo(ActivityType::class, 'activity_type_id', 'activity_type_id');
+    }
+
+    // ✅ ALIAS: Support both camelCase and snake_case
+    public function activity_type()
+    {
+        return $this->activityType();
     }
 
     public function items()
@@ -86,6 +93,11 @@ class PurchaseOrder extends Model
         return $this->hasMany(Invoice::class, 'po_id', 'po_id');
     }
 
+    public function deliveryNotes()
+    {
+        return $this->hasMany(DeliveryNote::class, 'po_id', 'po_id');
+    }
+
     public function createdByUser()
     {
         return $this->belongsTo(User::class, 'created_by', 'user_id');
@@ -94,6 +106,22 @@ class PurchaseOrder extends Model
     public function issuedByUser()
     {
         return $this->belongsTo(User::class, 'issued_by', 'user_id');
+    }
+
+    // ✅ Tender relationships
+    public function tenderProject()
+    {
+        return $this->hasOne(TenderProjectDetail::class, 'po_id', 'po_id');
+    }
+
+    public function bankGuarantees()
+    {
+        return $this->hasMany(BankGuarantee::class, 'po_id', 'po_id');
+    }
+
+    public function tenderDocuments()
+    {
+        return $this->hasMany(TenderDocument::class, 'po_id', 'po_id');
     }
 
     /* ================= ACCESSORS ================= */
@@ -160,24 +188,41 @@ class PurchaseOrder extends Model
         return false;
     }
 
- public function getActivityTypeNameAttribute()
-{
-    if ($this->activity_type) {                 // relasi di PO
-        return $this->activity_type->type_name;
-    }
-
-    if ($this->quotation && $this->quotation->activityType) {  // relasi di Quotation
-        return $this->quotation->activityType->type_name;
-    }
-
-    return null;
-}
-
-
-      // RELATIONSHIP BARU
-    public function deliveryNotes()
+    public function getActivityTypeNameAttribute()
     {
-        return $this->hasMany(DeliveryNote::class, 'po_id', 'po_id');
+        if ($this->activityType) {
+            return $this->activityType->type_name;
+        }
+
+        if ($this->quotation && $this->quotation->activityType) {
+            return $this->quotation->activityType->type_name;
+        }
+
+        return null;
+    }
+
+    /**
+     * ✅ NEW: Check if this PO is tender type
+     * This is used by frontend to conditionally render tender UI
+     */
+    public function getIsTenderAttribute()
+    {
+        // Priority 1: Check from direct activity_type relationship
+        if ($this->activityType && $this->activityType->type_code === 'TENDER') {
+            return true;
+        }
+        
+        // Priority 2: Check from quotation->activityType
+        if ($this->quotation && $this->quotation->activityType) {
+            return in_array($this->quotation->activityType->type_code, ['TENDER', 'paket_pengadaan', 'penunjukan_langsung']);
+        }
+        
+        // Priority 3: Check by activity_type_id (if 1 or 2, likely tender)
+        if (in_array($this->activity_type_id, [1, 2])) {
+            return true;
+        }
+        
+        return false;
     }
 
     /* ================= METHODS ================= */

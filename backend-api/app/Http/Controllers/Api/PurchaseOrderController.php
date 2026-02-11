@@ -5,6 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\PurchaseOrder;
 use App\Models\PurchaseOrderItem;
+use App\Models\TenderProjectDetail;
+use App\Models\DeliveryNote;
+use App\Models\DeliveryNoteItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
@@ -21,78 +24,94 @@ class PurchaseOrderController extends Controller
         $this->pdfService = $pdfService;
     }
 
-  public function index(Request $request)
-{
-    $query = PurchaseOrder::with([
-        'company', 
-        'customer', 
-        'quotation.activityType',
-        'activity_type',
-        'createdByUser', 
-        'issuedByUser',
-        'items',
-        'deliveryNotes'
-    ]);
+    /**
+     * ✅ UPDATED: Added tender relationships to eager loading
+     */
+    public function index(Request $request)
+    {
+        $query = PurchaseOrder::with([
+            'company', 
+            'customer', 
+            'quotation.activityType',
+            'activityType', // ✅ Changed from activity_type
+            'createdByUser', 
+            'issuedByUser',
+            'items',
+            'deliveryNotes',
+            // ✅ NEW: Tender relationships
+            'tenderProject',
+            'bankGuarantees',
+            'tenderDocuments'
+        ]);
 
-    if ($request->has('company_id')) {
-        $query->where('company_id', $request->company_id);
+        if ($request->has('company_id')) {
+            $query->where('company_id', $request->company_id);
+        }
+
+        if ($request->has('customer_id')) {
+            $query->where('customer_id', $request->customer_id);
+        }
+
+        if ($request->has('status')) {
+            $query->where('status', $request->status);
+        }
+
+        if ($request->has('activity_type_id')) {
+            $query->where('activity_type_id', $request->activity_type_id);
+        }
+
+        // ✅ NEW: Filter by tender type
+        if ($request->has('is_tender')) {
+            $isTender = $request->boolean('is_tender');
+            if ($isTender) {
+                $query->whereHas('activityType', function($q) {
+                    $q->where('type_code', 'TENDER');
+                });
+            } else {
+                $query->whereHas('activityType', function($q) {
+                    $q->where('type_code', '!=', 'TENDER');
+                });
+            }
+        }
+
+        if ($request->has('search')) {
+            $search = $request->search;
+            $query->where(function($q) use ($search) {
+                $q->where('po_number', 'like', "%{$search}%")
+                  ->orWhereHas('customer', function($cq) use ($search) {
+                      $cq->where('customer_name', 'like', "%{$search}%");
+                  });
+            });
+        }
+
+        if ($request->has('date_from')) {
+            $query->where('po_date', '>=', $request->date_from);
+        }
+
+        if ($request->has('date_to')) {
+            $query->where('po_date', '<=', $request->date_to);
+        }
+
+        $sortBy = $request->get('sort_by', 'po_id');
+        $sortOrder = $request->get('sort_order', 'desc'); 
+        $query->orderBy($sortBy, $sortOrder);
+
+        if ($sortBy !== 'po_id') {
+            $query->orderBy('po_id', 'desc');
+        }
+
+        $perPage = $request->get('per_page', 15);
+        $purchaseOrders = $query->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Purchase orders retrieved successfully',
+            'data' => $purchaseOrders
+        ], 200);
     }
-
-    if ($request->has('customer_id')) {
-        $query->where('customer_id', $request->customer_id);
-    }
-
-    if ($request->has('status')) {
-        $query->where('status', $request->status);
-    }
-
-    // Filter activity_type_id
-    if ($request->has('activity_type_id')) {
-        $query->where('activity_type_id', $request->activity_type_id);
-    }
-
-    if ($request->has('search')) {
-        $search = $request->search;
-        $query->where(function($q) use ($search) {
-            $q->where('po_number', 'like', "%{$search}%")
-              ->orWhereHas('customer', function($cq) use ($search) {
-                  $cq->where('customer_name', 'like', "%{$search}%");
-              });
-        });
-    }
-
-    if ($request->has('date_from')) {
-        $query->where('po_date', '>=', $request->date_from);
-    }
-
-    if ($request->has('date_to')) {
-        $query->where('po_date', '<=', $request->date_to);
-    }
-
-    // ✅ FIXED: Default sorting jadi po_id DESC (terbaru paling atas)
-    $sortBy = $request->get('sort_by', 'po_id');
-    $sortOrder = $request->get('sort_order', 'desc'); 
-    $query->orderBy($sortBy, $sortOrder);
-
-    // ✅ ADDED: Fallback sort jika user pakai kolom lain, tetap urutkan po_id desc sebagai secondary
-    if ($sortBy !== 'po_id') {
-        $query->orderBy('po_id', 'desc');
-    }
-
-    $perPage = $request->get('per_page', 15);
-    $purchaseOrders = $query->paginate($perPage);
-
-    return response()->json([
-        'success' => true,
-        'message' => 'Purchase orders retrieved successfully',
-        'data' => $purchaseOrders
-    ], 200);
-}
-
 
     public function store(Request $request)
     {
-        // ✅ FIX: Decode items jika dikirim sebagai JSON string (karena FormData)
         if ($request->has('items') && is_string($request->items)) {
             $request->merge([
                 'items' => json_decode($request->items, true)
@@ -183,7 +202,7 @@ class PurchaseOrderController extends Controller
 
             DB::commit();
 
-            $po->load(['company', 'customer', 'activity_type', 'createdByUser', 'items']);
+            $po->load(['company', 'customer', 'activityType', 'createdByUser', 'items']);
 
             return response()->json([
                 'success' => true,
@@ -201,19 +220,26 @@ class PurchaseOrderController extends Controller
         }
     }
 
+    /**
+     * ✅ UPDATED: Added tender relationships to eager loading
+     */
     public function show($id)
     {
         $po = PurchaseOrder::with([
             'company', 
             'customer', 
-            'quotation.activityType', // ✅ FIXED: camelCase
-            'activity_type',
+            'quotation.activityType',
+            'activityType',
             'quotation.items', 
             'items', 
             'invoices',
-            'deliveryNotes',          // ✅ ADDED
+            'deliveryNotes',
             'createdByUser',
-            'issuedByUser'
+            'issuedByUser',
+            // ✅ Tender relationships
+            'tenderProject',
+            'bankGuarantees',
+            'tenderDocuments'
         ])->find($id);
 
         if (!$po) {
@@ -332,7 +358,7 @@ class PurchaseOrderController extends Controller
 
             DB::commit();
 
-            $po->load(['company', 'customer', 'activity_type', 'createdByUser', 'items']);
+            $po->load(['company', 'customer', 'activityType', 'createdByUser', 'items']);
 
             return response()->json([
                 'success' => true,
@@ -372,6 +398,20 @@ class PurchaseOrderController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Cannot delete purchase order with existing invoices'
+            ], 409);
+        }
+
+        if ($po->tenderDocuments()->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot delete purchase order with uploaded tender documents'
+            ], 409);
+        }
+
+        if ($po->bankGuarantees()->where('status', 'active')->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot delete purchase order with active bank guarantees'
             ], 409);
         }
 
@@ -449,9 +489,12 @@ class PurchaseOrderController extends Controller
         }
     }
 
+    /**
+     * ✅ COMPLETELY REWRITTEN: Auto-create tender project & delivery note
+     */
     public function updateStatus(Request $request, $id)
     {
-        $po = PurchaseOrder::find($id);
+        $po = PurchaseOrder::with(['quotation.activityType', 'activityType', 'company', 'customer', 'items'])->find($id);
 
         if (!$po) {
             return response()->json([
@@ -472,8 +515,28 @@ class PurchaseOrderController extends Controller
             ], 422);
         }
 
+        DB::beginTransaction();
         try {
-            $po->update(['status' => $request->status]);
+            $oldStatus = $po->status;
+            $newStatus = $request->status;
+            
+            $po->update(['status' => $newStatus]);
+
+            // ✅ CRITICAL: Auto-create tender project & delivery note saat approved
+            if ($newStatus === 'approved' && $oldStatus !== 'approved') {
+                $this->handlePOApproval($po);
+            }
+
+            DB::commit();
+
+            // Reload relationships
+            $po->load([
+                'activityType',
+                'tenderProject',
+                'bankGuarantees',
+                'tenderDocuments',
+                'deliveryNotes'
+            ]);
 
             return response()->json([
                 'success' => true,
@@ -482,6 +545,7 @@ class PurchaseOrderController extends Controller
             ], 200);
 
         } catch (\Exception $e) {
+            DB::rollBack();
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update status',
@@ -490,14 +554,112 @@ class PurchaseOrderController extends Controller
         }
     }
 
+    /**
+     * ✅ NEW: Handle PO approval logic
+     * Auto-create tender project for TENDER type
+     * Auto-create delivery note for ALL types
+     */
+    private function handlePOApproval(PurchaseOrder $po)
+    {
+        // ✅ Check if this is tender type
+        $isTender = $po->is_tender; // Use accessor
+
+        // ✅ For TENDER: Create tender project
+        if ($isTender) {
+            $this->createTenderProject($po);
+        }
+
+        // ✅ For ALL: Create delivery note
+        $this->createDeliveryNote($po);
+    }
+
+    /**
+     * ✅ NEW: Create tender project
+     */
+    private function createTenderProject(PurchaseOrder $po)
+    {
+        // Check if already exists
+        $existing = TenderProjectDetail::where('po_id', $po->po_id)->first();
+        
+        if ($existing) {
+            return; // Already created
+        }
+
+        // Create tender project
+        TenderProjectDetail::create([
+            'po_id' => $po->po_id,
+            'contract_number' => $po->po_number,
+            'contract_start_date' => $po->po_date,
+            'contract_end_date' => null, // Will be set later by admin
+            'has_ba_uji_fungsi' => false,
+            'ba_uji_fungsi_date' => null,
+            'has_bahp' => false,
+            'bahp_date' => null,
+            'has_bast' => false,
+            'bast_date' => null,
+            'has_sp2d' => false,
+            'sp2d_date' => null,
+            'project_status' => 'ongoing',
+            'notes' => 'Auto-created from PO approval',
+            'created_by' => Auth::id(),
+        ]);
+    }
+
+    /**
+     * ✅ NEW: Create delivery note
+     */
+    private function createDeliveryNote(PurchaseOrder $po)
+    {
+        // Check if already exists
+        $existing = DeliveryNote::where('po_id', $po->po_id)->first();
+        
+        if ($existing) {
+            return; // Already created
+        }
+
+        // Generate delivery note number
+        $companyCode = $po->company ? $po->company->company_code : 'XXX';
+        $year = date('Y');
+        $sequence = DeliveryNote::whereYear('created_at', $year)->count() + 1;
+        $dnNumber = "DN/{$companyCode}/{$year}/" . str_pad($sequence, 4, '0', STR_PAD_LEFT);
+
+        // Create delivery note
+        $deliveryNote = DeliveryNote::create([
+            'company_id' => $po->company_id,
+            'po_id' => $po->po_id,
+            'delivery_note_number' => $dnNumber,
+            'delivery_date' => now(),
+            'recipient_name' => $po->customer ? $po->customer->customer_name : null,
+            'recipient_address' => $po->customer ? $po->customer->address : null,
+            'recipient_phone' => $po->customer ? $po->customer->phone : null,
+            'delivery_status' => 'pending',
+            'notes' => 'Auto-created from PO approval',
+            'created_by' => Auth::id(),
+        ]);
+
+        // Create delivery note items from PO items
+        foreach ($po->items as $poItem) {
+            DeliveryNoteItem::create([
+                'delivery_note_id' => $deliveryNote->delivery_note_id,
+                'product_id' => $poItem->product_id,
+                'product_name' => $poItem->product_name,
+                'specification' => $poItem->specification,
+                'quantity' => $poItem->quantity,
+                'unit' => $poItem->unit,
+            ]);
+        }
+    }
+
     public function generatePdf($id)
     {
         $po = PurchaseOrder::with([
             'company', 
             'customer',
-            'quotation.activityType', // ✅ FIXED: camelCase
+            'quotation.activityType',
             'items',
-            'issuedByUser'
+            'issuedByUser',
+            'tenderProject',
+            'bankGuarantees'
         ])->find($id);
 
         if (!$po) {

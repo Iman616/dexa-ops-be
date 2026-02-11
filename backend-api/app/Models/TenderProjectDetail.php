@@ -1,5 +1,4 @@
 <?php
-// app/Models/TenderProjectDetail.php
 
 namespace App\Models;
 
@@ -44,7 +43,14 @@ class TenderProjectDetail extends Model
         'has_sp2d' => 'boolean',
     ];
 
-    // Relationships
+    protected $appends = [
+        'completion_percentage',
+        'status_badge',
+        'contract_value', // ✅ NEW
+    ];
+
+    /* ================= RELATIONSHIPS ================= */
+
     public function purchaseOrder(): BelongsTo
     {
         return $this->belongsTo(PurchaseOrder::class, 'po_id', 'po_id');
@@ -65,7 +71,22 @@ class TenderProjectDetail extends Model
         return $this->belongsTo(User::class, 'created_by', 'user_id');
     }
 
-    // Accessors
+    /* ================= ACCESSORS ================= */
+
+    /**
+     * ✅ NEW: Get contract value from PO
+     */
+    public function getContractValueAttribute()
+    {
+        if ($this->purchaseOrder) {
+            return $this->purchaseOrder->total_amount;
+        }
+        return 0;
+    }
+
+    /**
+     * Calculate completion percentage based on 4 main documents
+     */
     public function getCompletionPercentageAttribute(): int
     {
         $total = 4; // BA, BAHP, BAST, SP2D
@@ -79,20 +100,27 @@ class TenderProjectDetail extends Model
         return (int) (($completed / $total) * 100);
     }
 
+    /**
+     * Get status badge with color
+     */
     public function getStatusBadgeAttribute()
     {
         return match($this->project_status) {
             'ongoing' => ['text' => 'Ongoing', 'color' => 'blue'],
-            'ba_done' => ['text' => 'BA Done', 'color' => 'indigo'],
-            'bahp_done' => ['text' => 'BAHP Done', 'color' => 'purple'],
-            'bast_done' => ['text' => 'BAST Done', 'color' => 'pink'],
-            'sp2d_done' => ['text' => 'SP2D Done', 'color' => 'orange'],
-            'completed' => ['text' => 'Completed', 'color' => 'green'],
+            'ba_done' => ['text' => 'BA Selesai', 'color' => 'indigo'],
+            'bahp_done' => ['text' => 'BAHP Selesai', 'color' => 'purple'],
+            'bast_done' => ['text' => 'BAST Selesai', 'color' => 'pink'],
+            'sp2d_done' => ['text' => 'SP2D Selesai', 'color' => 'orange'],
+            'completed' => ['text' => 'Selesai', 'color' => 'green'],
             default => ['text' => 'Unknown', 'color' => 'gray'],
         };
     }
 
-    // Methods
+    /* ================= METHODS ================= */
+
+    /**
+     * Update document status and project status
+     */
     public function updateDocumentStatus(string $documentType, bool $status, $date = null): void
     {
         $fieldMap = [
@@ -105,11 +133,48 @@ class TenderProjectDetail extends Model
         if (isset($fieldMap[$documentType])) {
             [$hasField, $dateField, $statusValue] = $fieldMap[$documentType];
             
-            $this->update([
+            $updateData = [
                 $hasField => $status,
-                $dateField => $date ?? now(),
-                'project_status' => $statusValue,
-            ]);
+                $dateField => $status ? ($date ?? now()) : null,
+            ];
+
+            // Update project status based on progression
+            if ($status) {
+                $updateData['project_status'] = $statusValue;
+                
+                // If all documents done, mark as completed
+                if ($this->has_ba_uji_fungsi && $this->has_bahp && 
+                    $this->has_bast && $this->has_sp2d) {
+                    $updateData['project_status'] = 'completed';
+                }
+            }
+            
+            $this->update($updateData);
         }
+    }
+
+    /**
+     * Check if project is overdue
+     */
+    public function isOverdue(): bool
+    {
+        if (!$this->contract_end_date || $this->project_status === 'completed') {
+            return false;
+        }
+
+        return now()->greaterThan($this->contract_end_date);
+    }
+
+    /**
+     * Get days remaining until contract end
+     */
+    public function getDaysRemainingAttribute(): ?int
+    {
+        if (!$this->contract_end_date || $this->project_status === 'completed') {
+            return null;
+        }
+
+        $diff = now()->diffInDays($this->contract_end_date, false);
+        return (int) $diff;
     }
 }

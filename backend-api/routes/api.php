@@ -91,20 +91,24 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
     // ==================== PRODUCTS ====================
-    Route::prefix('products')->group(function () {
-        Route::get('/', [ProductController::class, 'index']);
-        Route::post('/', [ProductController::class, 'store']);
-        Route::get('/categories', [ProductController::class, 'categories']);
-        Route::get('/{id}', [ProductController::class, 'show']);
-        Route::put('/{id}', [ProductController::class, 'update']);
-        Route::delete('/{id}', [ProductController::class, 'destroy']);
-        Route::post('/export', [ProductController::class, 'export']);
-        Route::post('/import', [ProductController::class, 'import']);
-        Route::get('/{id}/batches', [ProductController::class, 'batches']);
-        Route::get('/{id}/purchase-history', [ProductController::class, 'purchaseHistory']);
-        Route::post('/{id}/update-purchase-price', [ProductController::class, 'updatePurchasePriceFromLastPO']);
-    });
-
+   Route::prefix('products')->group(function () {
+    // List & CRUD
+    Route::get('/', [ProductController::class, 'index']);
+    Route::post('/', [ProductController::class, 'store']);
+    Route::get('/{id}', [ProductController::class, 'show']);
+    Route::put('/{id}', [ProductController::class, 'update']);
+    Route::delete('/{id}', [ProductController::class, 'destroy']);
+    
+    // Dropdown options
+    Route::get('/options/categories', [ProductController::class, 'categories']);
+    Route::get('/options/brands', [ProductController::class, 'brands']);
+    Route::get('/options/product-types', [ProductController::class, 'productTypes']);
+    
+    // Import/Export
+    Route::post('/import', [ProductController::class, 'import']);
+    Route::get('/export', [ProductController::class, 'export']);
+    Route::get('/import/template', [ProductController::class, 'downloadTemplate']);
+});
     // ==================== CUSTOMERS ====================
     Route::prefix('customers')->group(function () {
         Route::get('/', [CustomerController::class, 'index']);
@@ -147,12 +151,25 @@ Route::prefix('internal-notifications')->middleware(['auth:sanctum'])->group(fun
 });
 
 Route::prefix('tender-project-details')->middleware('auth:sanctum')->group(function () {
+    // List & Statistics
     Route::get('/', [TenderProjectDetailController::class, 'index']);
     Route::get('/statistics', [TenderProjectDetailController::class, 'statistics']);
-    Route::post('/from-po/{po_id}', [TenderProjectDetailController::class, 'storeFromPO']);
-    Route::get('/by-po/{po_id}', [TenderProjectDetailController::class, 'showByPO']);
+    
+    // Create from PO
+    Route::post('/from-po/{poId}', [TenderProjectDetailController::class, 'storeFromPO']);
+    
+    // Get by PO
+    Route::get('/by-po/{poId}', [TenderProjectDetailController::class, 'showByPO']);
+    
+    // CRUD
     Route::get('/{id}', [TenderProjectDetailController::class, 'show']);
     Route::put('/{id}', [TenderProjectDetailController::class, 'update']);
+    
+    // ✅ NEW: Document status update
+    Route::patch('/{id}/documents/{type}', [TenderProjectDetailController::class, 'updateDocumentStatus']);
+    
+    // ✅ NEW: Complete project
+    Route::post('/{id}/complete', [TenderProjectDetailController::class, 'complete']);
 });
 
   // Supplier Invoices

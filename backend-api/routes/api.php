@@ -34,12 +34,15 @@ use App\Http\Controllers\Api\TaxInvoiceController;
 
 use App\Http\Controllers\Api\InternalNotificationController;
 
-use App\Http\Controllers\Api\TenderDocumentController;
 
 use App\Http\Controllers\Api\ActivityTypeController;
 use App\Http\Controllers\Api\SupplierInvoiceController;
 use App\Http\Controllers\Api\StockReturnController;
 use App\Http\Controllers\Api\AgentPaymentController;
+use App\Http\Controllers\Api\TenderDocumentController;
+
+
+
 
 use App\Http\Controllers\Api\TenderProjectDetailController;
 
@@ -134,15 +137,15 @@ Route::middleware('auth:sanctum')->group(function () {
          Route::post('/{id}/convert-to-po', [QuotationController::class, 'convertToPurchaseOrder']);
     });
 
-     Route::prefix('dashboard')->group(function () {
-    Route::get('/stats', [DashboardController::class, 'getStats']);
-    Route::get('/recent-transactions', [DashboardController::class, 'getRecentTransactions']);
-    Route::get('/monthly-revenue', [DashboardController::class, 'getMonthlyRevenue']);
-    Route::get('/payment-methods', [DashboardController::class, 'getPaymentMethodStats']);
-    Route::get('/top-customers', [DashboardController::class, 'getTopCustomers']);
-    Route::get('/invoice-status', [DashboardController::class, 'getInvoiceStatusDistribution']);
-    Route::get('/weekly-revenue', [DashboardController::class, 'getWeeklyRevenue']);
-});
+//      Route::prefix('dashboard')->group(function () {
+//     Route::get('/stats', [DashboardController::class, 'getStats']);
+//     Route::get('/recent-transactions', [DashboardController::class, 'getRecentTransactions']);
+//     Route::get('/monthly-revenue', [DashboardController::class, 'getMonthlyRevenue']);
+//     Route::get('/payment-methods', [DashboardController::class, 'getPaymentMethodStats']);
+//     Route::get('/top-customers', [DashboardController::class, 'getTopCustomers']);
+//     Route::get('/invoice-status', [DashboardController::class, 'getInvoiceStatusDistribution']);
+//     Route::get('/weekly-revenue', [DashboardController::class, 'getWeeklyRevenue']);
+// });
 
 Route::prefix('internal-notifications')->middleware(['auth:sanctum'])->group(function () {
     Route::get('/', [InternalNotificationController::class, 'index']);
@@ -150,27 +153,36 @@ Route::prefix('internal-notifications')->middleware(['auth:sanctum'])->group(fun
     Route::post('/{notification}/read', [InternalNotificationController::class, 'markAsRead']);
 });
 
-Route::prefix('tender-project-details')->middleware('auth:sanctum')->group(function () {
-    // List & Statistics
-    Route::get('/', [TenderProjectDetailController::class, 'index']);
-    Route::get('/statistics', [TenderProjectDetailController::class, 'statistics']);
-    
-    // Create from PO
-    Route::post('/from-po/{poId}', [TenderProjectDetailController::class, 'storeFromPO']);
-    
-    // Get by PO
-    Route::get('/by-po/{poId}', [TenderProjectDetailController::class, 'showByPO']);
-    
-    // CRUD
-    Route::get('/{id}', [TenderProjectDetailController::class, 'show']);
-    Route::put('/{id}', [TenderProjectDetailController::class, 'update']);
-    
-    // ✅ NEW: Document status update
-    Route::patch('/{id}/documents/{type}', [TenderProjectDetailController::class, 'updateDocumentStatus']);
-    
-    // ✅ NEW: Complete project
-    Route::post('/{id}/complete', [TenderProjectDetailController::class, 'complete']);
-});
+Route::prefix('tender-projects')
+    ->middleware('auth:sanctum')
+    ->group(function () {
+        // List & Statistics
+        Route::get('/', [TenderProjectDetailController::class, 'index']);
+        Route::get('/statistics', [TenderProjectDetailController::class, 'statistics']);
+
+        // Create from PO
+        Route::post('/from-po/{poId}', [TenderProjectDetailController::class, 'storeFromPO'])
+            ->whereNumber('poId');
+
+        // Get by PO
+        Route::get('/by-po/{poId}', [TenderProjectDetailController::class, 'showByPO'])
+            ->whereNumber('poId');
+
+        // CRUD by internal IDcd
+        Route::get('/{id}', [TenderProjectDetailController::class, 'show'])
+            ->whereNumber('id');
+
+        Route::put('/{id}', [TenderProjectDetailController::class, 'update'])
+            ->whereNumber('id');
+
+        // Document status update
+        Route::patch('/{id}/documents/{type}', [TenderProjectDetailController::class, 'updateDocumentStatus'])
+            ->whereNumber('id');
+
+        // Complete project
+        Route::post('/{id}/complete', [TenderProjectDetailController::class, 'complete'])
+            ->whereNumber('id');
+    });
 
   // Supplier Invoices
     Route::prefix('supplier-invoices')->group(function () {
@@ -212,16 +224,22 @@ Route::prefix('tender-project-details')->middleware('auth:sanctum')->group(funct
     Route::get('/{id}/download-po-customer-file', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
 });
 
+
 Route::prefix('tender-documents')->middleware(['auth:sanctum'])->group(function () {
     Route::get('/', [TenderDocumentController::class, 'index']);
+    
+    // ✅ NEW: Upload & auto-approve (before normal store)
+    Route::post('/upload-and-approve', [TenderDocumentController::class, 'uploadAndApprove']);
+    
     Route::post('/', [TenderDocumentController::class, 'store']);
     Route::get('/by-po/{po_id}', [TenderDocumentController::class, 'getByPO']);
     Route::get('/statistics', [TenderDocumentController::class, 'statistics']);
     Route::get('/progress/{po_id}', [TenderDocumentController::class, 'progress']);
+    
     Route::get('/{document}', [TenderDocumentController::class, 'show']);
     Route::put('/{document}', [TenderDocumentController::class, 'update']);
     Route::delete('/{document}', [TenderDocumentController::class, 'destroy']);
-    
+
     // Actions
     Route::post('/{document}/submit', [TenderDocumentController::class, 'submit']);
     Route::post('/{document}/verify', [TenderDocumentController::class, 'verify']);
@@ -270,6 +288,7 @@ Route::prefix('purchase-orders')->group(function () {
     // ✅ TAMBAHAN: Upload & Download PO Customer
     Route::post('/{id}/upload-po-customer', [PurchaseOrderController::class, 'uploadPoCustomerFile']);
     Route::get('/{id}/po-customer-file', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
+     Route::get('/po-list', [TenderProjectDetailController::class, 'getTenderPOs']);
 });
  // ==================== SUPPLIER DELIVERY NOTES (Master Data) ====================
 Route::prefix('supplier-delivery-notes')->middleware('auth:sanctum')->group(function () {

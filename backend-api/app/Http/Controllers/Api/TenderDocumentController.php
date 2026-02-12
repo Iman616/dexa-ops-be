@@ -2,20 +2,20 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-
 use App\Services\TenderDocumentService;
 use App\Http\Requests\StoreTenderDocumentRequest;
 use App\Http\Requests\UpdateTenderDocumentRequest;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Validator;
 
 class TenderDocumentController extends Controller
 {
-    protected $tenderDocumentService;
+    protected $service;
 
-    public function __construct(TenderDocumentService $tenderDocumentService)
+    public function __construct(TenderDocumentService $service)
     {
-        $this->tenderDocumentService = $tenderDocumentService;
+        $this->service = $service;
     }
 
     /**
@@ -33,7 +33,7 @@ class TenderDocumentController extends Controller
                 'per_page' => $request->per_page ?? 15,
             ];
 
-            $documents = $this->tenderDocumentService->getAll($filters);
+            $documents = $this->service->getAll($filters);
 
             return response()->json([
                 'success' => true,
@@ -54,7 +54,7 @@ class TenderDocumentController extends Controller
     public function getByPO(int $poId): JsonResponse
     {
         try {
-            $documents = $this->tenderDocumentService->getByPO($poId);
+            $documents = $this->service->getByPO($poId);
 
             return response()->json([
                 'success' => true,
@@ -72,31 +72,44 @@ class TenderDocumentController extends Controller
     /**
      * Store a newly created document
      */
-    public function store(StoreTenderDocumentRequest $request): JsonResponse
+    public function store(Request $request): JsonResponse
     {
-        try {
-            if (!$request->hasFile('file')) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'File is required',
-                ], 400);
-            }
+        $validator = Validator::make($request->all(), [
+            'po_id' => 'required|exists:purchase_orders,po_id',
+            'company_id' => 'required|exists:companies,company_id',
+            'document_type' => 'required|in:ba_uji_fungsi,bahp,bast,sp2d,kontrak_asli,kontrak_soft,bukti_ppn,bukti_pph',
+            'document_number' => 'nullable|string|max:100',
+            'document_date' => 'required|date',
+            'file' => 'required|file|mimes:pdf,jpg,jpeg,png|max:10240',
+            'notes' => 'nullable|string',
+            'status' => 'nullable|in:draft,submitted',
+        ]);
 
-            $document = $this->tenderDocumentService->create(
-                $request->validated(),
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation error',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            $document = $this->service->create(
+                $request->all(),
                 $request->file('file')
             );
 
             return response()->json([
                 'success' => true,
-                'message' => 'Document uploaded successfully',
-                'data' => $document->load(['purchaseOrder', 'company', 'uploadedBy']),
+                'message' => 'Dokumen berhasil diupload',
+                'data' => $document,
             ], 201);
+
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to upload document',
-                'error' => $e->getMessage(),
+                'message' => 'Gagal upload dokumen',
+                'error' => $e->getMessage()
             ], 500);
         }
     }
@@ -107,7 +120,7 @@ class TenderDocumentController extends Controller
     public function show(int $documentId): JsonResponse
     {
         try {
-            $document = $this->tenderDocumentService->getById($documentId);
+            $document = $this->service->getById($documentId);
 
             return response()->json([
                 'success' => true,
@@ -128,7 +141,7 @@ class TenderDocumentController extends Controller
     public function update(UpdateTenderDocumentRequest $request, int $documentId): JsonResponse
     {
         try {
-            $document = $this->tenderDocumentService->update(
+            $document = $this->service->update(
                 $documentId,
                 $request->validated(),
                 $request->file('file')
@@ -154,7 +167,7 @@ class TenderDocumentController extends Controller
     public function submit(int $documentId): JsonResponse
     {
         try {
-            $document = $this->tenderDocumentService->submit($documentId);
+            $document = $this->service->submit($documentId);
 
             return response()->json([
                 'success' => true,
@@ -176,7 +189,7 @@ class TenderDocumentController extends Controller
     public function verify(int $documentId): JsonResponse
     {
         try {
-            $document = $this->tenderDocumentService->verify($documentId);
+            $document = $this->service->verify($documentId);
 
             return response()->json([
                 'success' => true,
@@ -198,7 +211,7 @@ class TenderDocumentController extends Controller
     public function approve(int $documentId): JsonResponse
     {
         try {
-            $document = $this->tenderDocumentService->approve($documentId);
+            $document = $this->service->approve($documentId);
 
             return response()->json([
                 'success' => true,
@@ -224,7 +237,7 @@ class TenderDocumentController extends Controller
         ]);
 
         try {
-            $document = $this->tenderDocumentService->reject($documentId, $request->reason);
+            $document = $this->service->reject($documentId, $request->reason);
 
             return response()->json([
                 'success' => true,
@@ -241,12 +254,64 @@ class TenderDocumentController extends Controller
     }
 
     /**
+     * Upload and auto-approve document
+     */
+    public function uploadAndApprove(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'po_id' => 'required|exists:purchase_orders,po_id',
+            'company_id' => 'required|exists:companies,company_id',
+            'document_type' => 'required|in:ba_uji_fungsi,bahp,bast,sp2d,kontrak_asli,kontrak_soft,bukti_ppn,bukti_pph',
+            'document_number' => 'nullable|string|max:100',
+            'document_date' => 'required|date',
+            'file' => 'required|file|mimes:pdf,jpg,jpeg,png|max:10240', // 10MB
+            'notes' => 'nullable|string',
+            'auto_approve' => 'nullable|boolean',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation error',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            $autoApprove = $request->boolean('auto_approve', true); // Default true
+            
+            $document = $this->service->uploadAndApprove(
+                $request->all(),
+                $request->file('file'),
+                $autoApprove
+            );
+
+            $message = $autoApprove 
+                ? "✅ {$document->type_label} berhasil diupload & approved! Progress updated."
+                : "Dokumen {$document->type_label} berhasil diupload. Menunggu approval.";
+
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'data' => $document,
+            ], 201);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal upload dokumen',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Remove the specified document
      */
     public function destroy(int $documentId): JsonResponse
     {
         try {
-            $this->tenderDocumentService->delete($documentId);
+            $this->service->delete($documentId);
 
             return response()->json([
                 'success' => true,
@@ -276,7 +341,7 @@ class TenderDocumentController extends Controller
                 ], 400);
             }
 
-            $statistics = $this->tenderDocumentService->getStatistics($poId);
+            $statistics = $this->service->getStatistics($poId);
 
             return response()->json([
                 'success' => true,
@@ -297,7 +362,7 @@ class TenderDocumentController extends Controller
     public function progress(int $poId): JsonResponse
     {
         try {
-            $progress = $this->tenderDocumentService->getTenderProgress($poId);
+            $progress = $this->service->getTenderProgress($poId);
 
             return response()->json([
                 'success' => true,
@@ -318,7 +383,7 @@ class TenderDocumentController extends Controller
     public function download(int $documentId): mixed
     {
         try {
-            $document = $this->tenderDocumentService->getById($documentId);
+            $document = $this->service->getById($documentId);
 
             if (!$document->file_path) {
                 return response()->json([

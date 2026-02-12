@@ -585,12 +585,19 @@ class PurchaseOrderController extends Controller
             return; // Already created
         }
 
+        $contractEndDate = $po->valid_until;
+
+        // Fallback: If null, use start_date + 30 days
+        if (!$contractEndDate) {
+            $contractEndDate = \Carbon\Carbon::parse($po->po_date)->addDays(30);
+        }
+
         // Create tender project
         TenderProjectDetail::create([
             'po_id' => $po->po_id,
             'contract_number' => $po->po_number,
             'contract_start_date' => $po->po_date,
-            'contract_end_date' => null, // Will be set later by admin
+            'contract_end_date' => $contractEndDate,
             'has_ba_uji_fungsi' => false,
             'ba_uji_fungsi_date' => null,
             'has_bahp' => false,

@@ -7,6 +7,8 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use App\Services\TenderProjectDetailService;
 use App\Models\TenderProjectDetail;
+use App\Models\PurchaseOrder;
+
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 
@@ -40,6 +42,41 @@ class TenderProjectDetailController extends Controller
             'data'    => $data,
         ]);
     }
+
+    public function getTenderPOs(Request $request): JsonResponse
+{
+    try {
+        $companyId = $request->company_id ?? Auth::user()?->company_id;
+        
+        $pos = PurchaseOrder::with([
+            'customer:customer_id,customer_name',
+            'activityType:activity_type_id,type_name'
+        ])
+        ->whereIn('activity_type_id', [1, 7, 8, 9]) // Tender types
+        ->when($companyId, fn($q) => $q->where('company_id', $companyId))
+        ->select('po_id', 'po_number', 'customer_id', 'activity_type_id', 'company_id')
+        ->orderBy('po_number', 'desc')
+        ->get()
+        ->map(fn($po) => [
+            'po_id' => $po->po_id,
+            'po_number' => $po->po_number,
+            'customer_name' => $po->customer->customer_name ?? '-',
+            'type_name' => $po->activityType->type_name ?? '-',
+            'company_id' => $po->company_id,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data' => $pos,
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to fetch tender POs',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
 
     /**
      * Create tender project from PO

@@ -12,22 +12,22 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Auth;
 
-
 class TenderDocumentService
 {
     /**
-     * Get all documents with filters
+     * ✅ FIXED: Get all documents with filters
      */
     public function getAll(array $filters = [])
     {
-        $query = TenderDocument::with([
-            'purchaseOrder:po_id,po_number,customer_id',
-            'purchaseOrder.customer:customer_id,customer_name',
-            'company:company_id,company_name,company_code',
-            'uploadedBy:user_id,name',
-            'verifiedBy:user_id,name',
-            'approvedBy:user_id,name'
-        ]);
+     $query = TenderDocument::with([
+        'purchaseOrder:po_id,po_number,customer_id,activity_type_id', // ✅ Add activity_type_id
+        'purchaseOrder.customer:customer_id,customer_name',
+        'purchaseOrder.activityType:activity_type_id,type_name', // ✅ NEW: Load activity type
+        'company:company_id,company_name,company_code',
+        'uploadedBy:user_id,username,full_name,email',
+        'verifiedBy:user_id,username,full_name,email',
+        'approvedBy:user_id,username,full_name,email'
+    ]);
 
         // Filter by PO
         if (!empty($filters['po_id'])) {
@@ -67,14 +67,15 @@ class TenderDocumentService
     }
 
     /**
-     * Get documents by PO
+     * ✅ FIXED: Get documents by PO
      */
     public function getByPO(int $poId)
     {
         return TenderDocument::with([
-            'uploadedBy:user_id,name',
-            'verifiedBy:user_id,name',
-            'approvedBy:user_id,name'
+            // ✅ FIXED: Ganti 'name' dengan 'username,full_name,email'
+            'uploadedBy:user_id,username,full_name,email',
+            'verifiedBy:user_id,username,full_name,email',
+            'approvedBy:user_id,username,full_name,email'
         ])
         ->where('po_id', $poId)
         ->orderBy('document_date', 'desc')
@@ -83,18 +84,21 @@ class TenderDocumentService
     }
 
     /**
-     * Get single document by ID
+     * ✅ UNCHANGED: Get single document by ID
+     * Tidak perlu specify columns karena akan load semua
      */
-    public function getById(int $documentId)
-    {
-        return TenderDocument::with([
-            'purchaseOrder.customer',
-            'company',
-            'uploadedBy',
-            'verifiedBy',
-            'approvedBy'
-        ])->findOrFail($documentId);
-    }
+   
+public function getById(int $documentId)
+{
+    return TenderDocument::with([
+        'purchaseOrder.customer',
+        'purchaseOrder.activityType', // ✅ NEW
+        'company',
+        'uploadedBy',
+        'verifiedBy',
+        'approvedBy'
+    ])->findOrFail($documentId);
+}
 
     /**
      * Create new document
@@ -125,7 +129,7 @@ class TenderDocumentService
                 'file_size' => $uploadedFile['size'],
                 'mime_type' => $uploadedFile['mime_type'],
                 'status' => 'draft',
-                'uploaded_by' =>  Auth::id(),
+                'uploaded_by' => Auth::id(),
                 'uploaded_at' => now(),
                 'notes' => $data['notes'] ?? null,
             ]);
@@ -135,7 +139,7 @@ class TenderDocumentService
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'create',
                 'module' => 'tender_documents',
                 'record_id' => $document->document_id,
@@ -185,7 +189,7 @@ class TenderDocumentService
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'update',
                 'module' => 'tender_documents',
                 'record_id' => $document->document_id,
@@ -215,7 +219,7 @@ class TenderDocumentService
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'submit',
                 'module' => 'tender_documents',
                 'record_id' => $document->document_id,
@@ -241,13 +245,13 @@ class TenderDocumentService
 
             $document->update([
                 'status' => 'verified',
-                'verified_by' =>  Auth::id(),
+                'verified_by' => Auth::id(),
                 'verified_at' => now(),
             ]);
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'verify',
                 'module' => 'tender_documents',
                 'record_id' => $document->document_id,
@@ -273,7 +277,7 @@ class TenderDocumentService
 
             $document->update([
                 'status' => 'approved',
-                'approved_by' =>  Auth::id(),
+                'approved_by' => Auth::id(),
                 'approved_at' => now(),
             ]);
 
@@ -282,7 +286,7 @@ class TenderDocumentService
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'approve',
                 'module' => 'tender_documents',
                 'record_id' => $document->document_id,
@@ -309,7 +313,7 @@ class TenderDocumentService
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'reject',
                 'module' => 'tender_documents',
                 'record_id' => $document->document_id,
@@ -348,7 +352,7 @@ class TenderDocumentService
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'delete',
                 'module' => 'tender_documents',
                 'record_id' => $documentId,
@@ -361,10 +365,103 @@ class TenderDocumentService
     }
 
     /**
+     * ✅ NEW: Upload document and auto-approve
+     */
+    public function uploadAndApprove(array $data, UploadedFile $file, bool $autoApprove = true): TenderDocument
+    {
+        return DB::transaction(function () use ($data, $file, $autoApprove) {
+            // Validate PO is tender
+            $po = PurchaseOrder::findOrFail($data['po_id']);
+            
+            // Check if PO is tender type (1,7,8,9)
+            if (!in_array($po->activity_type_id, [1, 7, 8, 9])) {
+                throw new \Exception('PO must be a tender type');
+            }
+
+            // Check if document already exists (approved)
+            $existingDoc = TenderDocument::where('po_id', $data['po_id'])
+                ->where('document_type', $data['document_type'])
+                ->where('status', 'approved')
+                ->first();
+
+            if ($existingDoc) {
+                throw new \Exception("Dokumen {$data['document_type']} sudah pernah diupload dan approved!");
+            }
+
+            // Upload file
+            $uploadedFile = $this->uploadFile($file, 'tender_documents/' . $data['document_type']);
+
+            // Prepare document data
+            $documentData = [
+                'po_id' => $data['po_id'],
+                'company_id' => $data['company_id'],
+                'document_type' => $data['document_type'],
+                'document_number' => $data['document_number'] ?? null,
+                'document_date' => $data['document_date'] ?? now(),
+                'file_path' => $uploadedFile['path'],
+                'file_name' => $uploadedFile['name'],
+                'file_size' => $uploadedFile['size'],
+                'mime_type' => $uploadedFile['mime_type'],
+                'notes' => $data['notes'] ?? null,
+                'uploaded_by' => Auth::id(),
+                'uploaded_at' => now(),
+            ];
+
+            // Set status based on auto-approve
+            if ($autoApprove) {
+                $documentData['status'] = 'approved';
+                $documentData['verified_by'] = Auth::id();
+                $documentData['verified_at'] = now();
+                $documentData['approved_by'] = Auth::id();
+                $documentData['approved_at'] = now();
+            } else {
+                $documentData['status'] = 'submitted';
+            }
+
+            // Create document
+            $document = TenderDocument::create($documentData);
+
+            // Update tender project details if auto-approved
+            if ($autoApprove) {
+                $this->updateTenderProjectStatus(
+                    $data['po_id'], 
+                    $data['document_type'], 
+                    true,
+                    $data['document_date']
+                );
+            }
+
+            // Log activity
+            ActivityLog::create([
+                'user_id' => Auth::id(),
+                'action' => $autoApprove ? 'upload_and_approve' : 'upload',
+                'module' => 'tender_documents',
+                'record_id' => $document->document_id,
+                'description' => ($autoApprove ? "Document uploaded & auto-approved: " : "Document uploaded: ") 
+                    . "{$document->type_label} for PO {$po->po_number}",
+                'ip_address' => request()->ip(),
+            ]);
+
+            // ✅ FIXED: Load relationships tanpa specify columns
+            return $document->fresh([
+                'purchaseOrder',
+                'company',
+                'uploadedBy',
+                'verifiedBy',
+                'approvedBy'
+            ]);
+        });
+    }
+
+    /**
      * Update tender project status based on document type
      */
-    private function updateTenderProjectStatus(int $poId, string $documentType, bool $approved = false): void
-    {
+    private function updateTenderProjectStatus(
+        int $poId, 
+        string $documentType, 
+        bool $approved = false,
+        ?string $documentDate = null
+    ): void {
         $tenderDetail = TenderProjectDetail::where('po_id', $poId)->first();
         
         if (!$tenderDetail) {
@@ -378,17 +475,34 @@ class TenderDocumentService
             'sp2d' => ['has_sp2d', 'sp2d_date', 'sp2d_done'],
         ];
 
-        if (isset($statusMap[$documentType])) {
+        if (isset($statusMap[$documentType]) && $approved) {
             [$hasField, $dateField, $statusValue] = $statusMap[$documentType];
+
+            $updateData = [
+                $hasField => true,
+                $dateField => $documentDate ?? now(),
+                'project_status' => $statusValue,
+            ];
+
+            // Check if all documents completed
+            $tenderDetail->refresh();
             
-            // Only update if approved or auto-approve on upload
-            if ($approved) {
-                $tenderDetail->update([
-                    $hasField => true,
-                    $dateField => now(),
-                    'project_status' => $statusValue,
-                ]);
+            $allCompleted = true;
+            foreach (['ba_uji_fungsi', 'bahp', 'bast', 'sp2d'] as $type) {
+                $field = $statusMap[$type][0] ?? null;
+                if ($field && $type !== $documentType) {
+                    if (!$tenderDetail->$field) {
+                        $allCompleted = false;
+                        break;
+                    }
+                }
             }
+
+            if ($allCompleted) {
+                $updateData['project_status'] = 'completed';
+            }
+
+            $tenderDetail->update($updateData);
         }
     }
 
@@ -452,13 +566,13 @@ class TenderDocumentService
     }
 
     /**
-     * Upload file
+     * Upload file helper
      */
     private function uploadFile(UploadedFile $file, string $folder): array
     {
         $fileName = time() . '_' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $file->getClientOriginalName());
         $path = $file->storeAs($folder, $fileName, 'public');
-        
+
         return [
             'path' => $path,
             'name' => $file->getClientOriginalName(),

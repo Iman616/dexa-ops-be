@@ -21,7 +21,7 @@ class User extends Authenticatable
         'full_name',
         'role_id',
         'phone',
-        'default_company_id', // ⭐ BARU
+        'default_company_id',
         'is_active',
         'last_login'
     ];
@@ -34,6 +34,9 @@ class User extends Authenticatable
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];
+
+    // ✅ NEW: Tambahkan 'name' ke appends agar otomatis di-serialize
+    protected $appends = ['name', 'display_name', 'accessible_companies'];
 
     /* ================= RELATIONSHIPS ================= */
     
@@ -54,11 +57,11 @@ class User extends Authenticatable
             'company_id',
             'user_id',
             'company_id'
-       )
-    ->withPivot('is_default', 'created_at', 'updated_at')
-    ->withTimestamps()
-    ->select(['companies.company_id', 'companies.company_code', 'companies.company_name']); // ✅ Qualify here
-}
+        )
+        ->withPivot('is_default', 'created_at', 'updated_at')
+        ->withTimestamps()
+        ->select(['companies.company_id', 'companies.company_code', 'companies.company_name']);
+    }
 
     /**
      * ⭐ Default company user
@@ -101,6 +104,18 @@ class User extends Authenticatable
 
     /* ================= ACCESSORS ================= */
 
+    /**
+     * ✅ NEW: Accessor untuk 'name' agar kompatibel dengan code yang expect 'name'
+     * Priority: full_name > username > email
+     */
+    public function getNameAttribute()
+    {
+        return $this->full_name ?: $this->username ?: $this->email;
+    }
+
+    /**
+     * ⭐ Display name untuk UI
+     */
     public function getDisplayNameAttribute()
     {
         return $this->full_name ?: $this->username;
@@ -121,7 +136,7 @@ class User extends Authenticatable
         });
     }
 
-      public function hasPermission(string $menuKey, string $action = 'read'): bool
+    public function hasPermission(string $menuKey, string $action = 'read'): bool
     {
         return $this->role->hasPermission($menuKey, $action);
     }
@@ -199,6 +214,4 @@ class User extends Authenticatable
             $this->update(['default_company_id' => null]);
         }
     }
-
-    
 }

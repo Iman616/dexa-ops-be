@@ -20,6 +20,7 @@ class StockBatch extends Model
         'quantity_initial',
         'purchase_price',
         'supplier_id',
+         'supplier_delivery_note_item_id',
         'manufacture_date',
         'expiry_date',
         'alert_date',
@@ -95,6 +96,15 @@ class StockBatch extends Model
         return $this->expiry_date->isFuture() && 
                $this->expiry_date->diffInDays(now()) <= 30;
     }
+
+    public function supplierDeliveryNoteItem()
+{
+    return $this->belongsTo(
+        \App\Models\SupplierDeliveryNoteItem::class,
+        'supplier_delivery_note_item_id',
+        'item_id'
+    );
+}
 
     public function getDaysUntilExpiryAttribute()
     {

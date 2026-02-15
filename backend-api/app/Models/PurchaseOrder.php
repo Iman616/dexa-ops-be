@@ -56,6 +56,89 @@ class PurchaseOrder extends Model
     ];
 
     /* ================= RELATIONSHIPS ================= */
+     public function validateStockAvailability()
+    {
+        if (!$this->company_id) {
+            throw new \Exception('Company ID is required for stock validation');
+        }
+
+        // Load items if not loaded
+        $this->loadMissing('items');
+
+        if ($this->items->isEmpty()) {
+            return [
+                'is_valid' => true,
+                'total_items' => 0,
+                'insufficient_items' => 0,
+                'issues' => [],
+            ];
+        }
+
+        // ✅ OPTIMIZED: Preload stock data for all items (single query)
+        $stockData = PurchaseOrderItem::preloadStockData($this->items, $this->company_id);
+
+        $issues = [];
+        $allSufficient = true;
+
+        foreach ($this->items as $item) {
+            if (!$item->product_id) {
+                continue; // Skip non-product items
+            }
+
+            $available = (float)($stockData[$item->product_id] ?? 0);
+            $required = (float)$item->quantity;
+
+            if ($available < $required) {
+                $allSufficient = false;
+                
+                $issues[] = [
+                    'product_id' => $item->product_id,
+                    'product_name' => $item->product_name,
+                    'required' => $required,
+                    'available' => $available,
+                    'shortage' => $required - $available,
+                    'status' => $available > 0 ? 'low' : 'insufficient',
+                ];
+            }
+        }
+
+        return [
+            'is_valid' => $allSufficient,
+            'total_items' => $this->items->count(),
+            'insufficient_items' => count($issues),
+            'issues' => $issues,
+        ];
+    }
+
+    /**
+     * ✅ NEW: Check if PO can be approved based on stock
+     */
+    public function canBeApproved()
+    {
+        // Can only approve draft POs
+        if ($this->status !== 'draft') {
+            return [
+                'can_approve' => false,
+                'reason' => 'PO status must be draft',
+            ];
+        }
+
+        // Check stock
+        $validation = $this->validateStockAvailability();
+
+        if (!$validation['is_valid']) {
+            return [
+                'can_approve' => false,
+                'reason' => 'Insufficient stock',
+                'validation' => $validation,
+            ];
+        }
+
+        return [
+            'can_approve' => true,
+            'validation' => $validation,
+        ];
+    }
 
     public function company()
     {

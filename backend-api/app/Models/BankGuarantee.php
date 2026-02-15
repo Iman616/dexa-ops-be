@@ -1,5 +1,5 @@
 <?php
-// app/Models/BankGuarantee.php
+// app/Models/AgentPayment.php
 
 namespace App\Models;
 
@@ -57,7 +57,6 @@ class BankGuarantee extends Model
         return $this->belongsTo(User::class, 'created_by', 'user_id');
     }
 
-    // Scopes
     public function scopeActive($query)
     {
         return $query->where('status', 'active');

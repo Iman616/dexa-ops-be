@@ -25,7 +25,8 @@ class SupplierPurchaseOrderController extends Controller
             'company',
             'createdByUser',
             'issuedByUser',
-            'items'
+            'items',
+             'purchaseOrder',
         ]);
 
         // Filter by company
@@ -37,6 +38,10 @@ class SupplierPurchaseOrderController extends Controller
         if ($request->has('supplier_id')) {
             $query->where('supplier_id', $request->supplier_id);
         }
+
+         if ($request->has('po_id')) {           // ⬅️ filter per PO tender
+        $query->where('po_id', $request->po_id);
+    }
 
         // Filter by status
         if ($request->has('status')) {
@@ -83,6 +88,7 @@ class SupplierPurchaseOrderController extends Controller
         $validator = Validator::make($request->all(), [
             'supplier_id' => 'required|exists:suppliers,supplier_id',
             'company_id' => 'required|exists:companies,company_id',
+            'po_id' => 'nullable|exists:purchase_orders,po_id',
             'po_date' => 'required|date',
             'expected_delivery_date' => 'nullable|date|after_or_equal:po_date',
             'items' => 'required|array|min:1',
@@ -123,6 +129,7 @@ class SupplierPurchaseOrderController extends Controller
             // Create Supplier PO
             $supplierPo = SupplierPurchaseOrder::create([
                 'po_number' => SupplierPurchaseOrder::generatePoNumber(),
+                'po_id' => $request->po_id,
                 'supplier_id' => $request->supplier_id,
                 'company_id' => $request->company_id,
                 'po_date' => $request->po_date,
@@ -193,7 +200,8 @@ class SupplierPurchaseOrderController extends Controller
             'company',
             'items.product',
             'createdByUser',
-            'issuedByUser'
+            'issuedByUser',
+            'purchaseOrder',
         ])->find($id);
 
         if (!$supplierPo) {
@@ -232,6 +240,7 @@ class SupplierPurchaseOrderController extends Controller
 
         $validator = Validator::make($request->all(), [
             'supplier_id' => 'sometimes|exists:suppliers,supplier_id',
+             'po_id' => 'sometimes|nullable|exists:purchase_orders,po_id',
             'company_id' => 'sometimes|exists:companies,company_id',
             'po_date' => 'sometimes|date',
             'expected_delivery_date' => 'nullable|date',

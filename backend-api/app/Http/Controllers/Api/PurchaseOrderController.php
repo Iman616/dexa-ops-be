@@ -27,22 +27,38 @@ class PurchaseOrderController extends Controller
     /**
      * ✅ UPDATED: Added tender relationships to eager loading
      */
-    public function index(Request $request)
-    {
-        $query = PurchaseOrder::with([
-            'company', 
-            'customer', 
-            'quotation.activityType',
-            'activityType', // ✅ Changed from activity_type
-            'createdByUser', 
-            'issuedByUser',
-            'items',
-            'deliveryNotes',
-            // ✅ NEW: Tender relationships
-            'tenderProject',
-            'bankGuarantees',
-            'tenderDocuments'
-        ]);
+  public function index(Request $request)
+{
+    // ✅ SELECT hanya kolom yang diperlukan
+    $query = PurchaseOrder::select([
+        'po_id',
+        'company_id',
+        'customer_id',
+        'quotation_id',
+        'activity_type_id',
+        'po_number',
+        'po_date',
+        'valid_until',
+        'status',
+        'total_amount',
+        'created_at',
+    ]);
+
+    // ✅ Eager load hanya kolom yang diperlukan
+    $query->with([
+        'company:company_id,company_name,company_code',
+        'customer:customer_id,customer_name',
+        'quotation:quotation_id,quotation_number',
+        'activityType:activity_type_id,type_name,type_code',
+    ]);
+
+    // ✅ Count relationships (jangan load data)
+    $query->withCount([
+        'items',
+        'deliveryNotes',
+        'tenderDocuments'
+    ]);
+
 
         if ($request->has('company_id')) {
             $query->where('company_id', $request->company_id);
@@ -110,6 +126,9 @@ class PurchaseOrderController extends Controller
         ], 200);
     }
 
+ /**
+     * ✅ UPDATED: Validate stock saat create PO
+     */
     public function store(Request $request)
     {
         if ($request->has('items') && is_string($request->items)) {
@@ -148,6 +167,9 @@ class PurchaseOrderController extends Controller
             ], 422);
         }
 
+        // ✅ NEW: Validate stock BEFORE creating PO
+        $stockValidation = $this->validateStockForItems($request->items, $request->company_id);
+        
         DB::beginTransaction();
         try {
             $poFilePath = null;
@@ -204,10 +226,12 @@ class PurchaseOrderController extends Controller
 
             $po->load(['company', 'customer', 'activityType', 'createdByUser', 'items']);
 
+            // ✅ Return with stock validation info
             return response()->json([
                 'success' => true,
                 'message' => 'Purchase order created successfully',
-                'data' => $po
+                'data' => $po,
+                'stock_validation' => $stockValidation, // ✅ Include stock info
             ], 201);
 
         } catch (\Exception $e) {
@@ -220,6 +244,188 @@ class PurchaseOrderController extends Controller
         }
     }
 
+    /**
+     * ✅ NEW: Validate stock for items (helper method)
+     */
+    private function validateStockForItems($items, $companyId)
+    {
+        if (empty($items)) {
+            return [
+                'is_valid' => true,
+                'total_items' => 0,
+                'insufficient_items' => 0,
+                'issues' => [],
+            ];
+        }
+
+        // Get all product IDs
+        $productIds = collect($items)
+            ->pluck('product_id')
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($productIds->isEmpty()) {
+            return [
+                'is_valid' => true,
+                'total_items' => count($items),
+                'insufficient_items' => 0,
+                'issues' => [],
+                'note' => 'No products to validate (custom items only)',
+            ];
+        }
+
+        // ✅ Single query for all products
+        $stockData = DB::table('stock_batches')
+            ->whereIn('product_id', $productIds)
+            ->where('company_id', $companyId)
+            ->where('status', 'active')
+            ->select('product_id', DB::raw('SUM(quantity_available) as total_available'))
+            ->groupBy('product_id')
+            ->pluck('total_available', 'product_id');
+
+        $issues = [];
+        $allSufficient = true;
+
+        foreach ($items as $item) {
+            if (!isset($item['product_id']) || !$item['product_id']) {
+                continue; // Skip non-product items
+            }
+
+            $available = (float)($stockData[$item['product_id']] ?? 0);
+            $required = (float)$item['quantity'];
+
+            if ($available < $required) {
+                $allSufficient = false;
+                
+                $issues[] = [
+                    'product_id' => $item['product_id'],
+                    'product_name' => $item['product_name'],
+                    'required' => $required,
+                    'available' => $available,
+                    'shortage' => $required - $available,
+                    'status' => $available > 0 ? 'low' : 'out_of_stock',
+                    'recommendation' => 'Buat PO Supplier untuk menambah stok',
+                ];
+            }
+        }
+
+        return [
+            'is_valid' => $allSufficient,
+            'total_items' => count($items),
+            'insufficient_items' => count($issues),
+            'issues' => $issues,
+            'warning' => !$allSufficient ? 'Beberapa produk stok tidak mencukupi. Silakan buat PO Supplier terlebih dahulu.' : null,
+        ];
+    }
+
+    /**
+     * ✅ NEW: Endpoint untuk check stock sebelum create/update PO
+     */
+    public function checkStock(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'company_id' => 'required|exists:companies,company_id',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'nullable|exists:products,product_id',
+            'items.*.product_name' => 'required|string',
+            'items.*.quantity' => 'required|numeric|min:0',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $validation = $this->validateStockForItems($request->items, $request->company_id);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Stock validation completed',
+            'data' => $validation,
+        ], 200);
+    }
+
+    /**
+     * ✅ UPDATED: Validate stock BEFORE approving PO
+     */
+    public function updateStatus(Request $request, $id)
+    {
+        $po = PurchaseOrder::with(['quotation.activityType', 'activityType', 'company', 'customer', 'items'])->find($id);
+
+        if (!$po) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Purchase order not found'
+            ], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'status' => 'required|in:draft,issued,sent,approved,processing,completed,cancelled',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation error',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $oldStatus = $po->status;
+        $newStatus = $request->status;
+
+        // ✅ CRITICAL: Validate stock BEFORE approval
+        if ($newStatus === 'approved' && $oldStatus !== 'approved') {
+            $validation = $po->validateStockAvailability();
+            
+            if (!$validation['is_valid']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'PO tidak dapat disetujui karena stok tidak mencukupi',
+                    'stock_validation' => $validation,
+                    'recommendation' => 'Silakan buat PO Supplier terlebih dahulu untuk menambah stok',
+                ], 422);
+            }
+        }
+
+        DB::beginTransaction();
+        try {
+            $po->update(['status' => $newStatus]);
+
+            // Auto-create tender project & delivery note saat approved
+            if ($newStatus === 'approved' && $oldStatus !== 'approved') {
+                $this->handlePOApproval($po);
+            }
+
+            DB::commit();
+
+            $po->load([
+                'activityType',
+                'tenderProject',
+                'bankGuarantees',
+                'tenderDocuments',
+                'deliveryNotes'
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Purchase order status updated successfully',
+                'data' => $po
+            ], 200);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update status',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
     /**
      * ✅ UPDATED: Added tender relationships to eager loading
      */
@@ -489,70 +695,7 @@ class PurchaseOrderController extends Controller
         }
     }
 
-    /**
-     * ✅ COMPLETELY REWRITTEN: Auto-create tender project & delivery note
-     */
-    public function updateStatus(Request $request, $id)
-    {
-        $po = PurchaseOrder::with(['quotation.activityType', 'activityType', 'company', 'customer', 'items'])->find($id);
-
-        if (!$po) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Purchase order not found'
-            ], 404);
-        }
-
-        $validator = Validator::make($request->all(), [
-            'status' => 'required|in:draft,issued,sent,approved,processing,completed,cancelled',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation error',
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        DB::beginTransaction();
-        try {
-            $oldStatus = $po->status;
-            $newStatus = $request->status;
-            
-            $po->update(['status' => $newStatus]);
-
-            // ✅ CRITICAL: Auto-create tender project & delivery note saat approved
-            if ($newStatus === 'approved' && $oldStatus !== 'approved') {
-                $this->handlePOApproval($po);
-            }
-
-            DB::commit();
-
-            // Reload relationships
-            $po->load([
-                'activityType',
-                'tenderProject',
-                'bankGuarantees',
-                'tenderDocuments',
-                'deliveryNotes'
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Purchase order status updated successfully',
-                'data' => $po
-            ], 200);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to update status',
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
+  
 
     /**
      * ✅ NEW: Handle PO approval logic

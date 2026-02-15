@@ -51,8 +51,14 @@ class StockReportController extends Controller
                 DB::raw('COALESCE(SUM(stock_in.quantity), 0) as total_quantity'),
                 DB::raw('COALESCE(SUM(stock_in.quantity * stock_in.purchase_price), 0) as total_value')
             )
-            ->groupBy('products.product_id', 'products.product_code', 'products.product_name', 
-                     'products.category', 'stock_batches.batch_number', 'stock_batches.expiry_date');
+            ->groupBy(
+                'products.product_id',
+                'products.product_code',
+                'products.product_name',
+                'products.category',
+                'stock_batches.batch_number',
+                'stock_batches.expiry_date'
+            );
 
         switch ($status) {
             case 'no_expiry':

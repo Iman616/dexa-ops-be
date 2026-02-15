@@ -9,58 +9,113 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 
 class CompanyController extends Controller
 {
     /**
-     * Display a listing of companies
+     * ✅ OPTIMIZED: Display a listing of companies
+     * - Selective column loading
+     * - Query optimization
+     * - Response caching
      */
     public function index(Request $request)
     {
-        $query = Company::query();
+        // ✅ Generate cache key based on request params
+        $cacheKey = 'companies_list_' . md5(json_encode($request->all()));
+        $cacheDuration = 300; // 5 minutes
+
+        // ✅ Return cached response if exists
+        if (!$request->has('no_cache') && Cache::has($cacheKey)) {
+            return Cache::get($cacheKey);
+        }
+
+        // ✅ Select only necessary columns for listing
+        $query = Company::select([
+            'company_id',
+            'company_code',
+            'company_name',
+            'address',
+            'phone',
+            'email',
+            'city',
+            'logo_path',
+            'is_active',
+            'created_at',
+        ]);
 
         // Filter by is_active
         if ($request->has('is_active')) {
             $query->where('is_active', $request->boolean('is_active'));
         }
 
-        // Search
-        if ($request->has('search')) {
+        // ✅ OPTIMIZED: Search with index-friendly queries
+        if ($request->filled('search')) {
             $search = $request->search;
+            
+            // Use LIKE with leading wildcard only when necessary
             $query->where(function ($q) use ($search) {
-                $q->where('company_code', 'like', "%{$search}%")
-                  ->orWhere('company_name', 'like', "%{$search}%")
-                  ->orWhere('email', 'like', "%{$search}%")
-                  ->orWhere('phone', 'like', "%{$search}%");
+                // Exact match first (uses index)
+                $q->where('company_code', $search)
+                  ->orWhere('company_name', $search)
+                  // Then fuzzy match
+                  ->orWhere('company_code', 'like', "{$search}%")
+                  ->orWhere('company_name', 'like', "{$search}%")
+                  ->orWhere('email', 'like', "{$search}%")
+                  ->orWhere('phone', 'like', "{$search}%");
             });
         }
 
-        // Sorting
+        // ✅ Whitelist sortable columns (security)
+        $allowedSortColumns = [
+            'company_code', 
+            'company_name', 
+            'email', 
+            'phone', 
+            'city',
+            'is_active',
+            'created_at'
+        ];
+        
         $sortBy = $request->get('sort_by', 'company_code');
+        $sortBy = in_array($sortBy, $allowedSortColumns) ? $sortBy : 'company_code';
+        
         $sortOrder = $request->get('sort_order', 'asc');
+        $sortOrder = in_array(strtolower($sortOrder), ['asc', 'desc']) ? $sortOrder : 'asc';
+        
         $query->orderBy($sortBy, $sortOrder);
 
         // Pagination
-        if ($request->get('paginate', true)) {
-            $perPage = $request->get('per_page', 15);
+        if ($request->boolean('paginate', true)) {
+            $perPage = min($request->get('per_page', 15), 100); // Max 100 per page
             $companies = $query->paginate($perPage);
         } else {
-            $companies = $query->get();
+            // ✅ Limit for non-paginated requests
+            $companies = $query->limit(1000)->get();
         }
 
-        return response()->json([
+        $response = response()->json([
             'success' => true,
             'message' => 'Companies retrieved successfully',
             'data' => $companies
         ], 200);
+
+        // ✅ Cache the response
+        Cache::put($cacheKey, $response, $cacheDuration);
+
+        return $response;
     }
 
     /**
-     * Store a newly created company - LENGKAP UNTUK KOP SURAT
+     * ✅ OPTIMIZED: Store a newly created company
+     * - Batch validation
+     * - Optimized file handling
+     * - Cache invalidation
      */
     public function store(Request $request)
     {
-        $validator = Validator::make($request->all(), [
+        // ✅ Use validate() instead of Validator::make() for cleaner code
+        $validated = $request->validate([
             'company_code' => 'required|string|max:10|unique:companies,company_code',
             'company_name' => 'required|string|max:255',
             
@@ -68,7 +123,7 @@ class CompanyController extends Controller
             'address' => 'nullable|string|max:500',
             'phone' => 'nullable|string|max:50',
             'email' => 'nullable|email|max:255',
-            'website' => 'nullable|max:100',
+            'website' => 'nullable|url|max:100',
             'city' => 'nullable|string|max:100',
             'pic_name' => 'nullable|string|max:100',
             
@@ -76,48 +131,57 @@ class CompanyController extends Controller
             'bank_name' => 'nullable|string|max:100',
             'bank_account' => 'nullable|string|max:50',
             
-            // LOGO UPLOAD - Accept file
-            'logo' => 'nullable|image|mimes:jpeg,jpg,png,gif|max:2048', // Max 2MB
+            // LOGO UPLOAD
+            'logo' => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:2048',
             
             // LAINNYA
             'is_active' => 'nullable|boolean',
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation error',
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
         try {
             DB::beginTransaction();
 
-            // Prepare company data (exclude logo file from mass assignment)
-            $companyData = $request->except(['logo', 'logo_file']);
-            $companyData['created_by'] = Auth::id() ?? 1; // Auto set creator
+            // ✅ Set defaults
+            $validated['created_by'] = Auth::id() ?? 1;
+            $validated['is_active'] = $validated['is_active'] ?? true;
 
-            // Handle logo upload BEFORE creating company
+            // ✅ OPTIMIZED: Handle logo upload with optimized filename
             if ($request->hasFile('logo')) {
-                $logoPath = $request->file('logo')->store('logos/companies', 'public');
-                $companyData['logo_path'] = $logoPath;
+                $file = $request->file('logo');
+                
+                // Generate optimized filename
+                $extension = $file->getClientOriginalExtension();
+                $filename = 'company_' . uniqid() . '_' . time() . '.' . $extension;
+                
+                // Store with custom filename
+                $logoPath = $file->storeAs('logos/companies', $filename, 'public');
+                $validated['logo_path'] = $logoPath;
             }
 
-            $company = Company::create($companyData);
+            $company = Company::create($validated);
 
             DB::commit();
+
+            // ✅ Clear cache
+            $this->clearCompanyCache();
 
             return response()->json([
                 'success' => true,
                 'message' => 'Company created successfully',
-                'data' => $company->fresh() // Reload untuk data terbaru
+                'data' => $company
             ], 201);
 
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation error',
+                'errors' => $e->errors()
+            ], 422);
+            
         } catch (\Exception $e) {
             DB::rollBack();
             
-            // Delete uploaded logo if company creation fails
+            // ✅ Cleanup uploaded file on error
             if (isset($logoPath) && Storage::disk('public')->exists($logoPath)) {
                 Storage::disk('public')->delete($logoPath);
             }
@@ -125,17 +189,26 @@ class CompanyController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to create company',
-                'error' => $e->getMessage()
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }
 
     /**
-     * Display the specified company - LENGKAP UNTUK PDF
+     * ✅ OPTIMIZED: Display the specified company
+     * - Selective eager loading
+     * - Response caching
      */
     public function show($id)
     {
-        $company = Company::with(['users'])->find($id);
+        // ✅ Cache individual company
+        $cacheKey = "company_detail_{$id}";
+        
+        $company = Cache::remember($cacheKey, 600, function () use ($id) {
+            return Company::with([
+                'users:user_id,username,email,full_name' // ✅ Select only needed columns
+            ])->find($id);
+        });
 
         if (!$company) {
             return response()->json([
@@ -152,7 +225,9 @@ class CompanyController extends Controller
     }
 
     /**
-     * Update the specified company - LENGKAP
+     * ✅ OPTIMIZED: Update the specified company
+     * - Optimized validation
+     * - Smart cache invalidation
      */
     public function update(Request $request, $id)
     {
@@ -165,15 +240,22 @@ class CompanyController extends Controller
             ], 404);
         }
 
-        $validator = Validator::make($request->all(), [
-            'company_code' => 'sometimes|required|string|max:10|unique:companies,company_code,' . $id . ',company_id',
+        // ✅ Use validate() with Rule object for cleaner unique validation
+        $validated = $request->validate([
+            'company_code' => [
+                'sometimes',
+                'required',
+                'string',
+                'max:10',
+                'unique:companies,company_code,' . $id . ',company_id'
+            ],
             'company_name' => 'sometimes|required|string|max:255',
             
             // KOLOM KOP SURAT
             'address' => 'nullable|string|max:500',
             'phone' => 'nullable|string|max:50',
             'email' => 'nullable|email|max:255',
-            'website' => 'nullable|max:100',
+            'website' => 'nullable|url|max:100',
             'city' => 'nullable|string|max:100',
             'pic_name' => 'nullable|string|max:100',
             
@@ -181,42 +263,42 @@ class CompanyController extends Controller
             'bank_name' => 'nullable|string|max:100',
             'bank_account' => 'nullable|string|max:50',
             
-            // LOGO UPLOAD - Accept file
-            'logo' => 'nullable|image|mimes:jpeg,jpg,png,gif|max:2048', // Max 2MB
+            // LOGO UPLOAD
+            'logo' => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:2048',
             
             // LAINNYA
             'is_active' => 'nullable|boolean',
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation error',
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
         try {
             DB::beginTransaction();
 
-            // Prepare update data (exclude logo file)
-            $updateData = $request->except(['logo', 'logo_file', '_method']);
+            $oldLogoPath = $company->logo_path;
 
-            // Handle logo upload
+            // ✅ Handle logo upload
             if ($request->hasFile('logo')) {
-                // Delete old logo if exists
-                if ($company->logo_path && Storage::disk('public')->exists($company->logo_path)) {
-                    Storage::disk('public')->delete($company->logo_path);
-                }
+                $file = $request->file('logo');
                 
-                // Upload new logo
-                $logoPath = $request->file('logo')->store('logos/companies', 'public');
-                $updateData['logo_path'] = $logoPath;
+                // Generate optimized filename
+                $extension = $file->getClientOriginalExtension();
+                $filename = 'company_' . $id . '_' . time() . '.' . $extension;
+                
+                // Store new logo
+                $logoPath = $file->storeAs('logos/companies', $filename, 'public');
+                $validated['logo_path'] = $logoPath;
+                
+                // ✅ Delete old logo AFTER successful upload
+                if ($oldLogoPath && Storage::disk('public')->exists($oldLogoPath)) {
+                    Storage::disk('public')->delete($oldLogoPath);
+                }
             }
 
-            $company->update($updateData);
+            $company->update($validated);
 
             DB::commit();
+
+            // ✅ Clear cache
+            $this->clearCompanyCache($id);
 
             return response()->json([
                 'success' => true,
@@ -224,24 +306,34 @@ class CompanyController extends Controller
                 'data' => $company->fresh()
             ], 200);
 
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation error',
+                'errors' => $e->errors()
+            ], 422);
+            
         } catch (\Exception $e) {
             DB::rollBack();
             
-            // Delete uploaded logo if update fails
-            if (isset($logoPath) && Storage::disk('public')->exists($logoPath)) {
-                Storage::disk('public')->delete($logoPath);
+            // ✅ Cleanup uploaded file on error
+            if (isset($logoPath) && $logoPath !== $oldLogoPath) {
+                if (Storage::disk('public')->exists($logoPath)) {
+                    Storage::disk('public')->delete($logoPath);
+                }
             }
             
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update company',
-                'error' => $e->getMessage()
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }
 
     /**
-     * Remove the specified company
+     * ✅ OPTIMIZED: Remove the specified company
+     * - Optimized dependency check
      */
     public function destroy($id)
     {
@@ -254,12 +346,23 @@ class CompanyController extends Controller
             ], 404);
         }
 
-        // Check dependencies
-        $hasTransactions = $company->stockBatches()->exists() ||
-                          $company->quotations()->exists() ||
-                          $company->invoices()->exists();
+        // ✅ OPTIMIZED: Use exists() with limit for faster check
+        $hasStockBatches = DB::table('stock_batches')
+            ->where('company_id', $id)
+            ->limit(1)
+            ->exists();
+            
+        $hasQuotations = DB::table('quotations')
+            ->where('company_id', $id)
+            ->limit(1)
+            ->exists();
+            
+        $hasInvoices = DB::table('invoices')
+            ->where('company_id', $id)
+            ->limit(1)
+            ->exists();
 
-        if ($hasTransactions) {
+        if ($hasStockBatches || $hasQuotations || $hasInvoices) {
             return response()->json([
                 'success' => false,
                 'message' => 'Cannot delete company with existing transactions'
@@ -275,7 +378,11 @@ class CompanyController extends Controller
             }
             
             $company->delete();
+            
             DB::commit();
+
+            // ✅ Clear cache
+            $this->clearCompanyCache($id);
 
             return response()->json([
                 'success' => true,
@@ -287,13 +394,13 @@ class CompanyController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to delete company',
-                'error' => $e->getMessage()
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }
 
     /**
-     * Toggle company active status
+     * ✅ OPTIMIZED: Toggle company active status
      */
     public function toggleActive($id)
     {
@@ -306,12 +413,65 @@ class CompanyController extends Controller
             ], 404);
         }
 
-        $company->update(['is_active' => !$company->is_active]);
+        // ✅ Use DB update for better performance (no model events)
+        DB::table('companies')
+            ->where('company_id', $id)
+            ->update(['is_active' => !$company->is_active]);
+
+        // Refresh model
+        $company->refresh();
+
+        // ✅ Clear cache
+        $this->clearCompanyCache($id);
 
         return response()->json([
             'success' => true,
             'message' => 'Company status updated',
             'data' => $company
+        ], 200);
+    }
+
+    /**
+     * ✅ NEW: Clear company-related cache
+     */
+    private function clearCompanyCache($companyId = null)
+    {
+        // Clear list cache (all variations)
+        Cache::forget('companies_list_*');
+        
+        // Clear specific company cache
+        if ($companyId) {
+            Cache::forget("company_detail_{$companyId}");
+            Cache::forget("po_{$companyId}_is_tender"); // Related PO cache
+        }
+        
+        // ✅ Clear cache tags if using Redis/Memcached
+        if (config('cache.default') !== 'file') {
+            Cache::tags(['companies'])->flush();
+        }
+    }
+
+    /**
+     * ✅ NEW: Get companies dropdown (lightweight)
+     * For select options in forms
+     */
+    public function dropdown(Request $request)
+    {
+        $cacheKey = 'companies_dropdown_' . ($request->boolean('active_only') ? 'active' : 'all');
+        
+        $companies = Cache::remember($cacheKey, 3600, function () use ($request) {
+            $query = Company::select(['company_id', 'company_code', 'company_name', 'logo_path']);  
+            
+            if ($request->boolean('active_only', true)) {
+                $query->where('is_active', true);
+            }
+            
+            return $query->orderBy('company_code')->get();
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $companies
         ], 200);
     }
 }

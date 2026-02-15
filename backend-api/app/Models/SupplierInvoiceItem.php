@@ -29,12 +29,17 @@ class SupplierInvoiceItem extends Model
         'subtotal' => 'decimal:2',
     ];
 
+    public function getSubtotalAttribute()
+    {
+        return $this->quantity * $this->unit_price;
+    }
+    
     // Relationships
     public function invoice()
     {
         return $this->belongsTo(SupplierInvoice::class, 'supplier_invoice_id', 'supplier_invoice_id');
     }
-
+    
     public function product()
     {
         return $this->belongsTo(Product::class, 'product_id', 'product_id');

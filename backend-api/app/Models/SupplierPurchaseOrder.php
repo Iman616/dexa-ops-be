@@ -12,27 +12,32 @@ class SupplierPurchaseOrder extends Model
     protected $table = 'supplier_purchase_orders';
     protected $primaryKey = 'supplier_po_id';
 
-    protected $fillable = [
-        'po_number',
-        'supplier_id',
-        'company_id',
-        'po_date',
-        'expected_delivery_date',
-        'status',
-        'payment_status',
-        'subtotal',
-        'tax_amount',
-        'discount_amount',
-        'total_amount',
-        'notes',
-        'terms',
-        'signed_name',
-        'signed_position',
-        'signed_city',
-        'issued_at',
-        'issued_by',
-        'created_by',
-    ];
+  // app/Models/SupplierPurchaseOrder.php
+
+protected $fillable = [
+    'po_number',
+    'po_id',              // ⬅️ tambahkan ini
+    'supplier_id',
+    'company_id',
+    'po_date',
+    'expected_delivery_date',
+    'status',
+    'payment_status',
+    'subtotal',
+    'tax_amount',
+    'discount_amount',
+    'total_amount',
+    'notes',
+    'terms',
+    'signed_name',
+    'signed_position',
+    'signed_city',
+    'issued_at',
+    'issued_by',
+    'created_by',
+];
+
+
 
     protected $casts = [
         'po_date' => 'date',
@@ -47,6 +52,11 @@ class SupplierPurchaseOrder extends Model
     protected $appends = ['status_label', 'payment_status_label', 'is_overdue'];
 
     // Relationships
+
+    public function purchaseOrder()
+{
+    return $this->belongsTo(PurchaseOrder::class, 'po_id', 'po_id');
+}
     public function supplier()
     {
         return $this->belongsTo(Supplier::class, 'supplier_id', 'supplier_id');

@@ -52,6 +52,13 @@ class SupplierDeliveryNote extends Model
         return $this->belongsTo(Supplier::class, 'supplier_id', 'supplier_id');
     }
 
+
+        public function invoice()
+        {
+            return $this->hasOne(SupplierInvoice::class, 'supplier_delivery_note_id', 'supplier_delivery_note_id');
+        }
+
+
     public function supplierPo()
     {
         return $this->belongsTo(SupplierPurchaseOrder::class, 'supplier_po_id', 'supplier_po_id');

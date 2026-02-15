@@ -29,6 +29,7 @@ class StockOutController extends Controller
     public function index(Request $request)
     {
         $query = StockOut::with([
+            'company:company_id,company_name,company_code',
             'product:product_id,product_code,product_name,category,unit,selling_price',
             'batch:batch_id,batch_number,product_id,expiry_date',
             'customer:customer_id,customer_name,contact_person,phone',
@@ -41,19 +42,19 @@ class StockOutController extends Controller
         // ✅ NEW: Enhanced search dengan new fields
         if ($request->has('search')) {
             $search = $request->search;
-            $query->where(function($q) use ($search) {
-                $q->whereHas('product', function($pq) use ($search) {
+            $query->where(function ($q) use ($search) {
+                $q->whereHas('product', function ($pq) use ($search) {
                     $pq->where('product_name', 'like', "%{$search}%")
-                       ->orWhere('product_code', 'like', "%{$search}%");
+                        ->orWhere('product_code', 'like', "%{$search}%");
                 })
-                ->orWhereHas('customer', function($cq) use ($search) {
-                    $cq->where('customer_name', 'like', "%{$search}%");
-                })
-                ->orWhereHas('deliveryNote', function($dnq) use ($search) {
-                    $dnq->where('delivery_note_number', 'like', "%{$search}%");
-                })
-                ->orWhere('received_by', 'like', "%{$search}%")
-                ->orWhere('receiving_location', 'like', "%{$search}%");
+                    ->orWhereHas('customer', function ($cq) use ($search) {
+                        $cq->where('customer_name', 'like', "%{$search}%");
+                    })
+                    ->orWhereHas('deliveryNote', function ($dnq) use ($search) {
+                        $dnq->where('delivery_note_number', 'like', "%{$search}%");
+                    })
+                    ->orWhere('received_by', 'like', "%{$search}%")
+                    ->orWhere('receiving_location', 'like', "%{$search}%");
             });
         }
 
@@ -74,7 +75,7 @@ class StockOutController extends Controller
 
         // ✅ NEW: Only show gudang staff transactions
         if ($request->boolean('gudang_only')) {
-            $query->whereHas('processedBy', function($q) {
+            $query->whereHas('processedBy', function ($q) {
                 $q->where('role_id', 4); // 4 = Staff Gudang
             });
         }
@@ -160,7 +161,7 @@ class StockOutController extends Controller
 
         try {
             $deliveryNote = DeliveryNote::with('items.product')->find($request->delivery_note_id);
-            
+
             if ($deliveryNote->delivery_status !== 'delivered') {
                 return response()->json([
                     'success' => false,
@@ -213,6 +214,7 @@ class StockOutController extends Controller
                     $used = min($remaining, $batch->available_qty);
 
                     $stockOut = StockOut::create([
+                        'company_id'        => $deliveryNote->company_id,
                         'product_id' => $item->product_id,
                         'batch_id' => $batch->batch_id,
                         'customer_id' => $deliveryNote->customer_id,
@@ -228,15 +230,17 @@ class StockOutController extends Controller
 
                     // ✅ NEW: Create stock movement
                     StockMovement::create([
-                        'batch_id' => $batch->batch_id,
-                        'movement_type' => 'OUT',
-                        'reference_type' => 'delivery_note',
-                        'reference_id' => $deliveryNote->delivery_note_id,
-                        'quantity' => $used,
-                        'unit_cost' => $batch->purchase_price,
-                        'total_cost' => $used * $batch->purchase_price,
-                        'movement_date' => $request->out_date,
-                        'notes' => "Stock OUT dari delivery note {$deliveryNote->delivery_note_number}"
+                        'product_id'      => $item->product_id,
+                        'batch_id'        => $batch->batch_id,
+                        'movement_type'   => 'OUT',  // ✅ UPPERCASE (konsisten dengan model)
+                        'quantity'        => $used,
+                        'unit_cost'       => $batch->purchase_price,
+                        'total_cost'      => $used * $batch->purchase_price,  // ✅ ADD THIS
+                        'reference_id'    => $stockOut->stock_out_id,
+                        'reference_type'  => 'stock_out',
+                        'movement_date'   => $request->out_date,  // ✅ ADD THIS
+                        'notes'           => "Stock OUT dari DN {$deliveryNote->delivery_note_number}",
+                        'created_by'      => $processedBy,
                     ]);
 
                     $stockOutRecords[] = $stockOut;
@@ -255,7 +259,6 @@ class StockOutController extends Controller
                 'message' => 'Stock OUT dari delivery note berhasil dicatat',
                 'data' => $stockOutRecords
             ], 201);
-
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
@@ -309,15 +312,17 @@ class StockOutController extends Controller
             // ✅ If damaged or partial, create adjustment movement
             if (in_array($request->receiving_condition, ['damaged', 'partial'])) {
                 StockMovement::create([
-                    'batch_id' => $stockOut->batch_id,
-                    'movement_type' => 'ADJUSTMENT',
-                    'reference_type' => 'stock_out',
-                    'reference_id' => $stockOut->stock_out_id,
-                    'quantity' => $stockOut->quantity,
-                    'unit_cost' => $stockOut->batch->purchase_price,
-                    'total_cost' => $stockOut->quantity * $stockOut->batch->purchase_price,
-                    'movement_date' => now(),
-                    'notes' => "Adjustment: barang {$request->receiving_condition}"
+                    'product_id'      => $stockOut->product_id,  // ✅ ADD THIS
+                    'batch_id'        => $stockOut->batch_id,
+                    'movement_type'   => 'ADJUSTMENT',
+                    'reference_type'  => 'stock_out',
+                    'reference_id'    => $stockOut->stock_out_id,
+                    'quantity'        => $stockOut->quantity,
+                    'unit_cost'       => $stockOut->batch->purchase_price,
+                    'total_cost'      => $stockOut->quantity * $stockOut->batch->purchase_price,
+                    'movement_date'   => now(),
+                    'notes'           => "Adjustment: barang {$request->receiving_condition}",
+                    'created_by'      => Auth::id(),  // ✅ ADD THIS
                 ]);
             }
 
@@ -328,7 +333,6 @@ class StockOutController extends Controller
                 'message' => 'Status penerimaan berhasil diupdate',
                 'data' => $stockOut->fresh()
             ], 200);
-
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
@@ -387,7 +391,6 @@ class StockOutController extends Controller
                 'message' => 'Bukti berhasil diupload',
                 'data' => $attachment
             ], 201);
-
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -403,6 +406,7 @@ class StockOutController extends Controller
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
+            'company_id' => 'required|exists:companies,company_id',  // ✅ ADD THIS LINE
             'product_id' => 'required|exists:products,product_id',
             'customer_id' => 'nullable|exists:customers,customer_id',
             'delivery_note_id' => 'nullable|exists:delivery_notes,delivery_note_id',
@@ -469,25 +473,41 @@ class StockOutController extends Controller
 
                 $used = min($remaining, $batch->available_qty);
 
+                // ✅ CORRECT (around line 433):
                 $stockOut = StockOut::create([
-    'company_id'        => $request->company_id,
-    'product_id'        => $request->product_id,
-    'batch_id'          => $request->batch_id,
-    'customer_id'       => $request->customer_id,
-    'transaction_type'  => $request->transaction_type,
-    'quantity'          => $request->quantity,
-    'selling_price'     => $request->selling_price,
-    'out_date'          => $request->out_date,
-    'notes'             => $request->notes,
-                    'processed_by' => $processedBy,
-                    
-    'received_by'       => $request->received_by,
-    'receiving_location'=> $request->receiving_location,
-    'receiving_condition'=> $request->receiving_condition ?? 'good',
-    'receiving_datetime'=> $request->receiving_datetime,
-]);
+                    'company_id'        => $request->company_id,
+                    'product_id'        => $request->product_id,
+                    'batch_id'          => $batch->batch_id,
+                    'customer_id'       => $request->customer_id,
+                    'delivery_note_id'  => $request->delivery_note_id,
+                    'transaction_type'  => $request->transaction_type,
+                    'quantity'          => $used,
+                    'selling_price'     => $request->selling_price,
+                    'out_date'          => $request->out_date,
+                    'notes'             => $request->notes,
+                    'processed_by'      => $processedBy,
+                    'received_by'       => $request->received_by,
+                    'receiving_location' => $request->receiving_location,
+                    'receiving_condition' => $request->receiving_condition ?? 'good',
+                    'receiving_datetime' => $request->receiving_datetime,
+                ]);
+
+                // Add after StockOut::create():
+                StockMovement::create([
+                    'product_id'      => $request->product_id,
+                    'batch_id'        => $batch->batch_id,
+                    'movement_type'   => 'OUT',  // ✅ UPPERCASE
+                    'quantity'        => $used,
+                    'unit_cost'       => $batch->purchase_price,
+                    'total_cost'      => $used * $batch->purchase_price,  // ✅ ADD THIS
+                    'reference_id'    => $stockOut->stock_out_id,
+                    'reference_type'  => 'stock_out',
+                    'movement_date'   => $request->out_date,  // ✅ ADD THIS
+                    'notes'           => "Stock OUT - {$request->transaction_type}",
+                    'created_by'      => $processedBy,
+                ]);
                 // ✅ Create stock movement
-               
+
 
                 $stockOutRecords[] = $stockOut;
                 $remaining -= $used;
@@ -504,7 +524,6 @@ class StockOutController extends Controller
                 'message' => 'Stock out recorded successfully',
                 'data' => $stockOutRecords
             ], 201);
-
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
@@ -594,7 +613,6 @@ class StockOutController extends Controller
                 'message' => 'Stock out updated successfully',
                 'data' => $stockOut->fresh()
             ], 200);
-
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -635,7 +653,6 @@ class StockOutController extends Controller
                 'success' => true,
                 'message' => 'Stock out deleted successfully'
             ], 200);
-
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([

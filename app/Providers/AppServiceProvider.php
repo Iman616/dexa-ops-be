@@ -21,7 +21,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        // ✅ Register observer untuk PurchaseOrder
-        PurchaseOrder::observe(PurchaseOrderObserver::class);
+        // // ✅ Register observer untuk PurchaseOrder
+        // PurchaseOrder::observe(PurchaseOrderObserver::class);
     }
 }

@@ -281,6 +281,12 @@ public function stockReturns()
     return $this->hasMany(StockReturn::class, 'stock_out_id', 'stock_out_id');
 }
 
+// Add to StockOut.php
+public function company()
+{
+    return $this->belongsTo(Company::class, 'company_id', 'company_id');
+}
+
 /**
  * ✅ NEW: Check if has returns
  */

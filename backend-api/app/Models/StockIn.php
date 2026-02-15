@@ -10,23 +10,25 @@ class StockIn extends Model
     protected $table = 'stock_in';
     protected $primaryKey = 'stock_in_id';
 
-    protected $fillable = [
-        'company_id',
-        'supplier_po_id',
-        'delivery_note_number',
-        'delivery_note_date',
-        'delivery_note_file',
-        'product_id',
-        'batch_id',
-        'quantity',
-        'purchase_price',
-        'received_date',
-        'notes',
-        'received_by',
-        'receiver_name',          // ✅ NEW
-        'receiver_position',      // ✅ NEW
-        'received_datetime',      // ✅ NEW
-    ];
+   protected $fillable = [
+    'company_id',
+    'supplier_po_id',                      // Keep (legacy)
+    'supplier_delivery_note_id',           // ✅ NEW (MAIN LINK)
+    'supplier_delivery_note_item_id',      // ✅ NEW (ITEM LINK)
+    'delivery_note_number',                // Keep (legacy, now nullable)
+    'delivery_note_date',                  // Keep (legacy, now nullable)
+    'delivery_note_file',                  // Keep (legacy, now nullable)
+    'product_id',
+    'batch_id',
+    'quantity',
+    'purchase_price',
+    'received_date',
+    'notes',
+    'received_by',
+    'receiver_name',
+    'receiver_position',
+    'received_datetime',
+];
 
     protected $casts = [
         'company_id' => 'integer',
@@ -98,6 +100,31 @@ class StockIn extends Model
 
         return null;
     }
+
+    /**
+ * ✅ NEW: Supplier Delivery Note yang membuat Stock In ini
+ */
+public function supplierDeliveryNote()
+{
+    return $this->belongsTo(
+        \App\Models\SupplierDeliveryNote::class,
+        'supplier_delivery_note_id',
+        'supplier_delivery_note_id'
+    );
+}
+
+/**
+ * ✅ NEW: Item spesifik dari SDN
+ */
+public function supplierDeliveryNoteItem()
+{
+    return $this->belongsTo(
+        \App\Models\SupplierDeliveryNoteItem::class,
+        'supplier_delivery_note_item_id',
+        'item_id'
+    );
+}
+
 
     /* ================= FILE METHODS ================= */
 

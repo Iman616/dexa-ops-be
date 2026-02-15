@@ -4,6 +4,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class TenderDocument extends Model
@@ -43,6 +44,11 @@ class TenderDocument extends Model
     public function purchaseOrder(): BelongsTo
     {
         return $this->belongsTo(PurchaseOrder::class, 'po_id', 'po_id');
+    }
+
+     public function bankGuarantees(): HasMany
+    {
+        return $this->hasMany(BankGuarantee::class, 'po_id', 'po_id');
     }
 
     public function company(): BelongsTo

@@ -62,6 +62,163 @@ class SupplierInvoiceController extends Controller
         }
     }
 
+    public function getDraftInvoices(Request $request)
+{
+    try {
+        $query = SupplierInvoice::with([
+            'supplier',
+            'supplierDeliveryNote',
+            'items',
+            'createdByUser'
+        ])->draft(); // Use scope
+
+        // Search
+        if ($request->has('search')) {
+            $search = $request->search;
+            $query->where(function($q) use ($search) {
+                $q->where('invoice_number', 'like', "%{$search}%")
+                  ->orWhereHas('supplier', function($sq) use ($search) {
+                      $sq->where('supplier_name', 'like', "%{$search}%");
+                  });
+            });
+        }
+
+        // Sort
+        $sortBy = $request->get('sort_by', 'created_at');
+        $sortOrder = $request->get('sort_order', 'desc');
+        $query->orderBy($sortBy, $sortOrder);
+
+        $perPage = $request->get('per_page', 15);
+        $drafts = $query->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => $drafts->items(),
+            'current_page' => $drafts->currentPage(),
+            'last_page' => $drafts->lastPage(),
+            'per_page' => $drafts->perPage(),
+            'total' => $drafts->total(),
+        ]);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal mengambil draft invoice: ' . $e->getMessage()
+        ], 500);
+    }
+}
+
+public function issueDraftInvoice(Request $request, $id)
+{
+    $validator = Validator::make($request->all(), [
+        'invoice_number' => 'required|string|max:100|unique:supplierinvoices,invoice_number,' . $id . ',supplier_invoice_id',
+        'due_date' => 'nullable|date|after_or_equal:invoice_date',
+        'invoice_file' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120', // ✅ MANDATORY!
+        'notes' => 'nullable|string',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Validasi gagal',
+            'errors' => $validator->errors()
+        ], 422);
+    }
+
+    DB::beginTransaction();
+    try {
+        $invoice = SupplierInvoice::findOrFail($id);
+
+        // Check if draft
+        if ($invoice->invoice_status !== 'draft') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only draft invoices can be issued'
+            ], 400);
+        }
+
+        // Check if already has payment
+        if ($invoice->paid_amount > 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invoice sudah ada pembayaran, tidak dapat diubah'
+            ], 400);
+        }
+
+        // Upload invoice file
+        $file = $request->file('invoice_file');
+        $fileName = 'invoice_' . time() . '_' . $file->getClientOriginalName();
+        $invoiceFilePath = $file->storeAs('supplier_invoices', $fileName, 'public');
+
+        // Update invoice to issued
+        $invoice->update([
+            'invoice_number' => $request->invoice_number,
+            'invoice_date' => $request->invoice_date,
+            'due_date' => $request->due_date ?? $invoice->due_date,
+            'invoice_file_path' => $invoiceFilePath,
+            'invoice_status' => 'issued', // ✅ Change to issued
+            'notes' => $request->notes ?? $invoice->notes,
+        ]);
+
+        DB::commit();
+
+        $invoice->load(['supplier', 'items', 'supplierDeliveryNote', 'createdByUser']);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Invoice berhasil di-issue',
+            'data' => $invoice
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal meng-issue invoice: ' . $e->getMessage()
+        ], 500);
+    }
+}
+
+/**
+ * Delete draft invoice
+ * DELETE /api/supplier-invoices/{id}/draft
+ */
+public function deleteDraftInvoice($id)
+{
+    DB::beginTransaction();
+    try {
+        $invoice = SupplierInvoice::findOrFail($id);
+
+        // Check if draft
+        if ($invoice->invoice_status !== 'draft') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only draft invoices can be deleted'
+            ], 400);
+        }
+
+        // Delete items
+        $invoice->items()->delete();
+
+        // Delete invoice
+        $invoice->delete();
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Draft invoice berhasil dihapus'
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal menghapus draft: ' . $e->getMessage()
+        ], 500);
+    }
+}
+
     /**
      * Get single supplier invoice
      */
@@ -92,8 +249,7 @@ class SupplierInvoiceController extends Controller
         $validator = Validator::make($request->all(), [
             'supplier_id' => 'required|exists:suppliers,supplier_id',
             'supplier_po_id' => 'nullable|exists:supplier_purchase_orders,supplier_po_id',
-            'invoice_number' => 'required|string|unique:supplierinvoices,invoice_number|max:100',
-            'invoice_date' => 'required|date',
+'invoice_number' => 'required|string|unique:supplierinvoices,invoice_number|max:100',
             'due_date' => 'nullable|date|after_or_equal:invoice_date',
             'payment_terms' => 'nullable|in:cash,net7,net14,net30,net60,custom',
             'notes' => 'nullable|string',
@@ -190,8 +346,7 @@ class SupplierInvoiceController extends Controller
         $validator = Validator::make($request->all(), [
             'supplier_id' => 'required|exists:suppliers,supplier_id',
             'supplier_po_id' => 'nullable|exists:supplier_purchase_orders,supplier_po_id',
-            'invoice_number' => 'required|string|max:100|unique:supplierinvoices,invoice_number,' . $id . ',supplier_invoice_id',
-            'invoice_date' => 'required|date',
+'invoice_number' => 'required|string|max:100|unique:supplierinvoices,invoice_number,' . $id . ',supplier_invoice_id',
             'due_date' => 'nullable|date|after_or_equal:invoice_date',
             'payment_terms' => 'nullable|in:cash,net7,net14,net30,net60,custom',
             'notes' => 'nullable|string',
@@ -379,8 +534,7 @@ class SupplierInvoiceController extends Controller
     {
         // ✅ FIX validation
         $validator = Validator::make($request->all(), [
-            'supplier_invoice_id' => 'required|exists:supplierinvoices,supplier_invoice_id',
-            'amount' => 'required|numeric|min:0.01',
+'supplier_invoice_id' => 'required|exists:supplierinvoices,supplier_invoice_id',
             'payment_date' => 'required|date',
             'payment_type' => 'required|in:dp,partial,full',
             'status' => 'required|in:pending,success,failed,cancelled',

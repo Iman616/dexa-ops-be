@@ -23,6 +23,15 @@ class PurchaseOrderObserver
     {
         // Cek apakah status berubah menjadi 'approved'
         if ($purchaseOrder->isDirty('status') && $purchaseOrder->status === 'approved') {
+            
+            // ✅ VALIDATE STOCK FIRST (already done in approve() method, but double check)
+            try {
+                $purchaseOrder->validateStockForApproval();
+            } catch (\Exception $e) {
+                Log::warning("PO {$purchaseOrder->po_number} approved but has stock issues: {$e->getMessage()}");
+                // Don't block DN creation, just log warning
+            }
+            
             try {
                 // Auto-generate delivery note
                 $deliveryNote = $this->deliveryNoteService->createFromPurchaseOrder($purchaseOrder);

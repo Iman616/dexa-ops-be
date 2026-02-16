@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\DB;
 class CustomerController extends Controller
 {
     /**
-     * Display a listing of customers with filters
+     * ✅ UPDATED: Display a listing of customers with filters
      */
     public function index(Request $request)
     {
@@ -24,8 +24,33 @@ class CustomerController extends Controller
                 $q->where('customer_name', 'LIKE', "%{$search}%")
                   ->orWhere('contact_person', 'LIKE', "%{$search}%")
                   ->orWhere('email', 'LIKE', "%{$search}%")
-                  ->orWhere('phone', 'LIKE', "%{$search}%");
+                  ->orWhere('phone', 'LIKE', "%{$search}%")
+                  ->orWhere('npwp', 'LIKE', "%{$search}%")    // ✅ NEW
+                  ->orWhere('nib', 'LIKE', "%{$search}%");    // ✅ NEW
             });
+        }
+
+        // ✅ NEW: Filter by tax info availability
+        if ($request->has('has_npwp')) {
+            $hasNpwp = $request->boolean('has_npwp');
+            if ($hasNpwp) {
+                $query->hasNpwp();
+            } else {
+                $query->where(function($q) {
+                    $q->whereNull('npwp')->orWhere('npwp', '');
+                });
+            }
+        }
+
+        if ($request->has('has_nib')) {
+            $hasNib = $request->boolean('has_nib');
+            if ($hasNib) {
+                $query->hasNib();
+            } else {
+                $query->where(function($q) {
+                    $q->whereNull('nib')->orWhere('nib', '');
+                });
+            }
         }
 
         // Sorting
@@ -45,7 +70,7 @@ class CustomerController extends Controller
     }
 
     /**
-     * Store a newly created customer
+     * ✅ UPDATED: Store a newly created customer
      */
     public function store(Request $request)
     {
@@ -55,6 +80,12 @@ class CustomerController extends Controller
             'email' => 'nullable|email|max:255',
             'phone' => 'nullable|string|max:50',
             'address' => 'nullable|string',
+            'npwp' => 'nullable|string|max:50|regex:/^[0-9.\-]+$/',  // ✅ NEW: Allow numbers, dots, dashes
+            'nib' => 'nullable|string|max:50|regex:/^[0-9]+$/',      // ✅ NEW: Numbers only
+            'tax_address' => 'nullable|string|max:500',              // ✅ NEW
+        ], [
+            'npwp.regex' => 'NPWP hanya boleh berisi angka, titik, dan strip',
+            'nib.regex' => 'NIB hanya boleh berisi angka',
         ]);
 
         if ($validator->fails()) {
@@ -83,7 +114,7 @@ class CustomerController extends Controller
     }
 
     /**
-     * Display the specified customer
+     * ✅ UPDATED: Display the specified customer
      */
     public function show($id)
     {
@@ -106,7 +137,18 @@ class CustomerController extends Controller
             )
             ->first();
 
+        // ✅ NEW: Get quotation and PO summary
+        $quotationCount = DB::table('quotations')
+            ->where('customer_id', $id)
+            ->count();
+
+        $poCount = DB::table('purchase_orders')
+            ->where('customer_id', $id)
+            ->count();
+
         $customer->transaction_summary = $transactionSummary;
+        $customer->quotation_count = $quotationCount;      // ✅ NEW
+        $customer->purchase_order_count = $poCount;        // ✅ NEW
 
         return response()->json([
             'success' => true,
@@ -116,7 +158,7 @@ class CustomerController extends Controller
     }
 
     /**
-     * Update the specified customer
+     * ✅ UPDATED: Update the specified customer
      */
     public function update(Request $request, $id)
     {
@@ -135,6 +177,12 @@ class CustomerController extends Controller
             'email' => 'nullable|email|max:255',
             'phone' => 'nullable|string|max:50',
             'address' => 'nullable|string',
+            'npwp' => 'nullable|string|max:50|regex:/^[0-9.\-]+$/',  // ✅ NEW
+            'nib' => 'nullable|string|max:50|regex:/^[0-9]+$/',      // ✅ NEW
+            'tax_address' => 'nullable|string|max:500',              // ✅ NEW
+        ], [
+            'npwp.regex' => 'NPWP hanya boleh berisi angka, titik, dan strip',
+            'nib.regex' => 'NIB hanya boleh berisi angka',
         ]);
 
         if ($validator->fails()) {
@@ -163,7 +211,7 @@ class CustomerController extends Controller
     }
 
     /**
-     * Remove the specified customer
+     * ✅ UPDATED: Remove the specified customer
      */
     public function destroy($id)
     {
@@ -188,6 +236,30 @@ class CustomerController extends Controller
             ], 400);
         }
 
+        // ✅ NEW: Check if customer has quotations
+        $hasQuotations = DB::table('quotations')
+            ->where('customer_id', $id)
+            ->exists();
+
+        if ($hasQuotations) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot delete customer with existing quotations'
+            ], 400);
+        }
+
+        // ✅ NEW: Check if customer has purchase orders
+        $hasPurchaseOrders = DB::table('purchase_orders')
+            ->where('customer_id', $id)
+            ->exists();
+
+        if ($hasPurchaseOrders) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot delete customer with existing purchase orders'
+            ], 400);
+        }
+
         try {
             $customer->delete();
 
@@ -202,5 +274,46 @@ class CustomerController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * ✅ NEW: Validate NPWP format
+     */
+    public function validateNpwp(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'npwp' => 'required|string|regex:/^[0-9.\-]+$/',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid NPWP format',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        // Clean NPWP
+        $cleanNpwp = preg_replace('/[^0-9]/', '', $request->npwp);
+
+        // Check if NPWP is 15 digits
+        $isValid = strlen($cleanNpwp) === 15;
+
+        // Check if NPWP already exists
+        $exists = Customer::where('npwp', $cleanNpwp)
+            ->when($request->has('customer_id'), function($q) use ($request) {
+                return $q->where('customer_id', '!=', $request->customer_id);
+            })
+            ->exists();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'is_valid' => $isValid,
+                'is_unique' => !$exists,
+                'clean_npwp' => $cleanNpwp,
+                'length' => strlen($cleanNpwp),
+            ]
+        ], 200);
     }
 }

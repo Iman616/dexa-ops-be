@@ -31,6 +31,7 @@ use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\SupplierPurchaseOrderController;
 use App\Http\Controllers\Api\SupplierDeliveryNoteController;
 use App\Http\Controllers\Api\TaxInvoiceController;
+use App\Http\Controllers\Api\TaxController;
 
 use App\Http\Controllers\Api\BankGuaranteeController;
 
@@ -42,6 +43,10 @@ use App\Http\Controllers\Api\SupplierInvoiceController;
 use App\Http\Controllers\Api\StockReturnController;
 use App\Http\Controllers\Api\AgentPaymentController;
 use App\Http\Controllers\Api\TenderDocumentController;
+use App\Http\Controllers\Api\PurchaseOrderAgentTrackingController;
+
+
+
 
 
 
@@ -251,7 +256,35 @@ Route::prefix('supplier-invoices')->middleware('auth:sanctum')->group(function (
         Route::get('/{id}/download-proof', [SupplierInvoiceController::class, 'downloadPaymentProof']);
     });
 
+    Route::prefix('taxes')->group(function () {
+    Route::get('/active', [TaxController::class, 'active']); // Must be before {id}
+    Route::post('/calculate', [TaxController::class, 'calculate']);
+    Route::get('/', [TaxController::class, 'index']);
+    Route::post('/', [TaxController::class, 'store']);
+    Route::get('/{id}', [TaxController::class, 'show']);
+    Route::put('/{id}', [TaxController::class, 'update']);
+    Route::patch('/{id}/toggle-active', [TaxController::class, 'toggleActive']);
+    Route::delete('/{id}', [TaxController::class, 'destroy']);
+});
 
+ Route::prefix('po-agen-tracking')->group(function () {
+        Route::get('/', [PurchaseOrderAgentTrackingController::class, 'index']);
+        Route::post('/', [PurchaseOrderAgentTrackingController::class, 'store']);
+        Route::post('/bulk', [PurchaseOrderAgentTrackingController::class, 'bulkStore']);
+        Route::get('/{id}', [PurchaseOrderAgentTrackingController::class, 'show']);
+        Route::put('/{id}', [PurchaseOrderAgentTrackingController::class, 'update']);
+        Route::delete('/{id}', [PurchaseOrderAgentTrackingController::class, 'destroy']);
+        
+        // Get by PO item
+        Route::get('/po-item/{poItemId}', [PurchaseOrderAgentTrackingController::class, 'getByPoItem']);
+        
+        // Get summary by PO
+        Route::get('/summary/po/{poId}', [PurchaseOrderAgentTrackingController::class, 'getSummaryByPo']);
+        
+        // Status updates
+        Route::post('/{id}/mark-ordered', [PurchaseOrderAgentTrackingController::class, 'markAsOrdered']);
+        Route::post('/{id}/mark-delivered', [PurchaseOrderAgentTrackingController::class, 'markAsDelivered']);
+    });
 
 // Purchase Orders
 Route::prefix('purchase-orders')->group(function () {

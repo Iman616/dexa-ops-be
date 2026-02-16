@@ -24,12 +24,8 @@ class PurchaseOrderController extends Controller
         $this->pdfService = $pdfService;
     }
 
-    /**
-     * ✅ UPDATED: Added tender relationships to eager loading
-     */
   public function index(Request $request)
 {
-    // ✅ SELECT hanya kolom yang diperlukan
     $query = PurchaseOrder::select([
         'po_id',
         'company_id',
@@ -51,8 +47,6 @@ class PurchaseOrderController extends Controller
         'quotation:quotation_id,quotation_number',
         'activityType:activity_type_id,type_name,type_code',
     ]);
-
-    // ✅ Count relationships (jangan load data)
     $query->withCount([
         'items',
         'deliveryNotes',

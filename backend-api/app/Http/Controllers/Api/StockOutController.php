@@ -34,7 +34,7 @@ class StockOutController extends Controller
             'batch:batch_id,batch_number,product_id,expiry_date',
             'customer:customer_id,customer_name,contact_person,phone',
             'processedBy:user_id,username,full_name,email,role_id',
-            'deliveryNote:delivery_note_id,delivery_note_number,recipient_name,delivery_status',
+            'deliveryNote:delivery_note_id,delivery_note_number,recipient_name,status',
             'document_attachments',
             'stockMovements'
         ]);
@@ -162,12 +162,12 @@ class StockOutController extends Controller
         try {
             $deliveryNote = DeliveryNote::with('items.product')->find($request->delivery_note_id);
 
-            if ($deliveryNote->delivery_status !== 'delivered') {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Delivery note belum ter-deliver, tidak bisa create stock OUT'
-                ], 400);
-            }
+         if ($deliveryNote->status !== 'issued') {
+    return response()->json([
+        'success' => false,
+        'message' => 'Delivery note belum ter-issue, tidak bisa create stock OUT'
+    ], 400);
+}
 
             $stockOutRecords = [];
             $processedBy = Auth::id();
@@ -225,7 +225,7 @@ class StockOutController extends Controller
                         'out_date' => $request->out_date,
                         'notes' => $request->notes,
                         'processed_by' => $processedBy,
-                        'receiving_condition' => 'good' // default
+                        'receiving_condition' => 'required|in:good,damaged,incomplete',
                     ]);
 
                     // ✅ NEW: Create stock movement
@@ -310,8 +310,8 @@ class StockOutController extends Controller
             ]);
 
             // ✅ If damaged or partial, create adjustment movement
-            if (in_array($request->receiving_condition, ['damaged', 'partial'])) {
-                StockMovement::create([
+if (in_array($request->receiving_condition, ['damaged', 'incomplete'])) {
+                    StockMovement::create([
                     'product_id'      => $stockOut->product_id,  // ✅ ADD THIS
                     'batch_id'        => $stockOut->batch_id,
                     'movement_type'   => 'ADJUSTMENT',
@@ -418,7 +418,7 @@ class StockOutController extends Controller
             'processed_by' => 'nullable|exists:users,user_id',
             'received_by' => 'nullable|string|max:100',
             'receiving_location' => 'nullable|string|max:100',
-            'receiving_condition' => 'nullable|in:good,damaged,partial',
+'receiving_condition' => 'nullable|in:good,damaged,incomplete',
             'receiving_datetime' => 'nullable|date'
         ]);
 
@@ -584,7 +584,7 @@ class StockOutController extends Controller
             'notes' => 'nullable|string',
             'received_by' => 'nullable|string|max:100',
             'receiving_location' => 'nullable|string|max:100',
-            'receiving_condition' => 'nullable|in:good,damaged,partial',
+'receiving_condition' => 'nullable|in:good,damaged,incomplete',
             'receiving_datetime' => 'nullable|date'
         ]);
 

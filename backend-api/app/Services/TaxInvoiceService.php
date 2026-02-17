@@ -11,11 +11,10 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Auth;
 
-
 class TaxInvoiceService
 {
     /**
-     * Get all tax invoices with filters
+     * ✅ FIXED: Get all tax invoices with filters
      */
     public function getAll(array $filters = [])
     {
@@ -23,8 +22,9 @@ class TaxInvoiceService
             'company:company_id,company_name,company_code',
             'invoice:invoice_id,invoice_number,total_amount,customer_id',
             'invoice.customer:customer_id,customer_name',
-            'submittedBy:user_id,name',
-            'approvedBy:user_id,name'
+            // ✅ FIX: Use 'full_name' and 'username' instead of 'name'
+            'submittedBy:user_id,full_name,username',
+            'approvedBy:user_id,full_name,username',
         ]);
 
         // Filter by company
@@ -59,22 +59,49 @@ class TaxInvoiceService
         // Order
         $query->orderBy('tax_invoice_date', 'desc');
 
-        return $query->paginate($filters['per_page'] ?? 15);
+        $result = $query->paginate($filters['per_page'] ?? 15);
+
+        // ✅ Transform: Add 'name' attribute to user relations for compatibility
+        $result->getCollection()->transform(function ($item) {
+            if ($item->submittedBy) {
+                $item->submittedBy->name = $item->submittedBy->full_name ?: $item->submittedBy->username;
+            }
+            if ($item->approvedBy) {
+                $item->approvedBy->name = $item->approvedBy->full_name ?: $item->approvedBy->username;
+            }
+            return $item;
+        });
+
+        return $result;
     }
 
     /**
-     * Get single tax invoice by ID
+     * ✅ FIXED: Get single tax invoice by ID
      */
     public function getById(int $taxInvoiceId)
     {
-        return TaxInvoice::with([
+        $taxInvoice = TaxInvoice::with([
             'company',
             'invoice.customer',
             'invoice.items.product',
-            'submittedBy',
-            'approvedBy',
-            'createdBy'
+            // ✅ FIX: Use 'full_name' and 'username'
+            'submittedBy:user_id,full_name,username',
+            'approvedBy:user_id,full_name,username',
+            'createdBy:user_id,full_name,username',
         ])->findOrFail($taxInvoiceId);
+
+        // ✅ Add 'name' attribute for compatibility
+        if ($taxInvoice->submittedBy) {
+            $taxInvoice->submittedBy->name = $taxInvoice->submittedBy->full_name ?: $taxInvoice->submittedBy->username;
+        }
+        if ($taxInvoice->approvedBy) {
+            $taxInvoice->approvedBy->name = $taxInvoice->approvedBy->full_name ?: $taxInvoice->approvedBy->username;
+        }
+        if ($taxInvoice->createdBy) {
+            $taxInvoice->createdBy->name = $taxInvoice->createdBy->full_name ?: $taxInvoice->createdBy->username;
+        }
+
+        return $taxInvoice;
     }
 
     /**
@@ -113,12 +140,12 @@ class TaxInvoiceService
                 'status' => 'draft',
                 'file_path' => $filePath,
                 'notes' => $data['notes'] ?? null,
-                'created_by' =>  Auth::id(),
+                'created_by' => Auth::id(),
             ]);
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'create',
                 'module' => 'tax_invoices',
                 'record_id' => $taxInvoice->tax_invoice_id,
@@ -164,7 +191,7 @@ class TaxInvoiceService
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'update',
                 'module' => 'tax_invoices',
                 'record_id' => $taxInvoice->tax_invoice_id,
@@ -191,12 +218,12 @@ class TaxInvoiceService
             $taxInvoice->update([
                 'status' => 'submitted',
                 'submitted_at' => now(),
-                'submitted_by' =>  Auth::id(),
+                'submitted_by' => Auth::id(),
             ]);
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'submit',
                 'module' => 'tax_invoices',
                 'record_id' => $taxInvoice->tax_invoice_id,
@@ -223,12 +250,12 @@ class TaxInvoiceService
             $taxInvoice->update([
                 'status' => 'approved',
                 'approved_at' => now(),
-                'approved_by' =>  Auth::id(),
+                'approved_by' => Auth::id(),
             ]);
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'approve',
                 'module' => 'tax_invoices',
                 'record_id' => $taxInvoice->tax_invoice_id,
@@ -255,7 +282,7 @@ class TaxInvoiceService
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'reject',
                 'module' => 'tax_invoices',
                 'record_id' => $taxInvoice->tax_invoice_id,
@@ -290,7 +317,7 @@ class TaxInvoiceService
 
             // Log activity
             ActivityLog::create([
-                'user_id' =>  Auth::id(),
+                'user_id' => Auth::id(),
                 'action' => 'delete',
                 'module' => 'tax_invoices',
                 'record_id' => $taxInvoiceId,

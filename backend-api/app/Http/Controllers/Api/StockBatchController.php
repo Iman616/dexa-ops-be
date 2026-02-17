@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\StockBatch;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+
 
 class StockBatchController extends Controller
 {
@@ -391,35 +393,63 @@ class StockBatchController extends Controller
 }
 
 
-    public function store(Request $request)
-    {
-        $request->validate([
-            'product_id' => 'required|exists:products,product_id',
-            'batch_number' => 'required|string',
-            'manufacture_date' => 'nullable|date',
-            'expiry_date' => 'nullable|date',
+public function store(Request $request)
+{
+    $request->validate([
+        'product_id' => 'required|exists:products,product_id',
+        'batch_number' => 'required|string|max:100',
+        'quantity_initial' => 'required|integer|min:0', // ✅ ADD THIS
+        'quantity_available' => 'nullable|integer|min:0', // ✅ ADD THIS
+        'purchase_price' => 'nullable|numeric|min:0',
+        'supplier_id' => 'nullable|exists:suppliers,supplier_id',
+        'company_id' => 'nullable|exists:companies,company_id', // ✅ ADD THIS
+        'manufacture_date' => 'nullable|date',
+        'expiry_date' => 'nullable|date|after_or_equal:manufacture_date',
+        'received_date' => 'nullable|date',
+        'status' => 'nullable|in:active,inactive,expired',
+        'notes' => 'nullable|string|max:500',
+    ]);
+
+    try {
+        // ✅ Get authenticated user's company if not provided
+        $companyId = $request->company_id ?? Auth::user()->default_company_id ?? 3;
+
+        // ✅ Set quantity_available same as quantity_initial if not provided
+        $quantityInitial = $request->quantity_initial;
+        $quantityAvailable = $request->quantity_available ?? $quantityInitial;
+
+        $batch = StockBatch::create([
+            'company_id' => $companyId, // ✅ ADD THIS
+            'product_id' => $request->product_id,
+            'batch_number' => $request->batch_number,
+            'quantity_initial' => $quantityInitial, // ✅ ADD THIS (REQUIRED)
+            'quantity_available' => $quantityAvailable, // ✅ ADD THIS
+            'purchase_price' => $request->purchase_price,
+            'supplier_id' => $request->supplier_id,
+            'supplier_delivery_note_item_id' => $request->supplier_delivery_note_item_id,
+            'manufacture_date' => $request->manufacture_date,
+            'expiry_date' => $request->expiry_date,
+            'received_date' => $request->received_date ?? now(),
+            'status' => $request->status ?? 'active',
+            'notes' => $request->notes,
         ]);
 
-        try {
-            $batch = StockBatch::create([
-                'product_id' => $request->product_id,
-                'batch_number' => $request->batch_number,
-                'manufacture_date' => $request->manufacture_date,
-                'expiry_date' => $request->expiry_date,
-            ]);
+        // ✅ Load relationships
+        $batch->load('product', 'supplier', 'company');
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Batch created successfully',
-                'data' => $batch
-            ], 201);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to create batch: ' . $e->getMessage()
-            ], 500);
-        }
+        return response()->json([
+            'success' => true,
+            'message' => 'Batch created successfully',
+            'data' => $batch
+        ], 201);
+    } catch (\Exception $e) {
+        
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to create batch: ' . $e->getMessage()
+        ], 500);
     }
+}
 
     public function show($id)
     {

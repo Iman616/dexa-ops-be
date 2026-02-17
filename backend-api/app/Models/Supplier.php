@@ -20,13 +20,51 @@ class Supplier extends Model
         'address',
     ];
 
-    public function products()
+public function products()
     {
-        return $this->hasMany(Product::class, 'supplier_id', 'supplier_id');
+        return $this->belongsToMany(
+            Product::class,
+            'product_suppliers',
+            'supplier_id',
+            'product_id',
+            'supplier_id',
+            'product_id'
+        )->withPivot(['purchase_price', 'priority', 'is_active', 'min_order_qty', 'lead_time_days'])
+         ->withTimestamps();
     }
 
+     public function supplierPurchaseOrders()
+    {
+        return $this->hasMany(SupplierPurchaseOrder::class, 'supplier_id', 'supplier_id');
+    }
     public function purchaseOrders()
     {
         return $this->hasMany(SupplierPo::class, 'supplier_id', 'supplier_id');
+    }
+
+      /* ---- Static helpers ---- */
+
+    /**
+     * Cari supplier berdasarkan nama (exact / like)
+     */
+    public static function findByName(string $name, bool $exact = false): ?self
+    {
+        $query = self::query();
+
+        if ($exact) {
+            $query->where('supplier_name', $name);
+        } else {
+            $query->where('supplier_name', 'like', '%' . $name . '%');
+        }
+
+        return $query->first();
+    }
+
+    /**
+     * Cari banyak supplier berdasarkan nama
+     */
+    public static function searchByName(string $name)
+    {
+        return self::where('supplier_name', 'like', '%' . $name . '%')->get();
     }
 }

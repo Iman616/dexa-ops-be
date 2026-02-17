@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use App\Services\PurchaseOrderPdfService;
+use App\Services\StockHelper;
 
 class PurchaseOrderController extends Controller
 {
@@ -241,77 +242,63 @@ class PurchaseOrderController extends Controller
     /**
      * ✅ NEW: Validate stock for items (helper method)
      */
-    private function validateStockForItems($items, $companyId)
-    {
-        if (empty($items)) {
-            return [
-                'is_valid' => true,
-                'total_items' => 0,
-                'insufficient_items' => 0,
-                'issues' => [],
-            ];
-        }
+private function validateStockForItems($items, $companyId)
+{
+    if (empty($items)) {
+        return ['is_valid' => true, 'total_items' => 0, 'insufficient_items' => 0, 'issues' => []];
+    }
 
-        // Get all product IDs
-        $productIds = collect($items)
-            ->pluck('product_id')
-            ->filter()
-            ->unique()
-            ->values();
+    $productItems = collect($items)->filter(fn($i) => !empty($i['product_id']));
 
-        if ($productIds->isEmpty()) {
-            return [
-                'is_valid' => true,
-                'total_items' => count($items),
-                'insufficient_items' => 0,
-                'issues' => [],
-                'note' => 'No products to validate (custom items only)',
-            ];
-        }
-
-        // ✅ Single query for all products
-        $stockData = DB::table('stock_batches')
-            ->whereIn('product_id', $productIds)
-            ->where('company_id', $companyId)
-            ->where('status', 'active')
-            ->select('product_id', DB::raw('SUM(quantity_available) as total_available'))
-            ->groupBy('product_id')
-            ->pluck('total_available', 'product_id');
-
-        $issues = [];
-        $allSufficient = true;
-
-        foreach ($items as $item) {
-            if (!isset($item['product_id']) || !$item['product_id']) {
-                continue; // Skip non-product items
-            }
-
-            $available = (float)($stockData[$item['product_id']] ?? 0);
-            $required = (float)$item['quantity'];
-
-            if ($available < $required) {
-                $allSufficient = false;
-                
-                $issues[] = [
-                    'product_id' => $item['product_id'],
-                    'product_name' => $item['product_name'],
-                    'required' => $required,
-                    'available' => $available,
-                    'shortage' => $required - $available,
-                    'status' => $available > 0 ? 'low' : 'out_of_stock',
-                    'recommendation' => 'Buat PO Supplier untuk menambah stok',
-                ];
-            }
-        }
-
+    if ($productItems->isEmpty()) {
         return [
-            'is_valid' => $allSufficient,
-            'total_items' => count($items),
-            'insufficient_items' => count($issues),
-            'issues' => $issues,
-            'warning' => !$allSufficient ? 'Beberapa produk stok tidak mencukupi. Silakan buat PO Supplier terlebih dahulu.' : null,
+            'is_valid'          => true,
+            'total_items'       => count($items),
+            'insufficient_items'=> 0,
+            'issues'            => [],
+            'note'              => 'Semua item adalah item custom (tanpa product)',
         ];
     }
+
+    // ✅ Satu query real-time untuk semua produk
+    $stock = StockHelper::getAvailableByProducts(
+        $productItems->pluck('product_id')->unique(),
+        $companyId
+    );
+
+    $issues       = [];
+    $allSufficient = true;
+
+    foreach ($items as $item) {
+        if (empty($item['product_id'])) continue;
+
+        $available = (float)($stock[$item['product_id']] ?? 0);
+        $required  = (float)$item['quantity'];
+
+        if ($available < $required) {
+            $allSufficient = false;
+            $issues[] = [
+                'product_id'     => $item['product_id'],
+                'product_name'   => $item['product_name'],
+                'required'       => $required,
+                'available'      => $available,
+                'shortage'       => $required - $available,
+                'status'         => $available > 0 ? 'low' : 'out_of_stock',
+                'recommendation' => 'Buat PO Supplier untuk menambah stok',
+            ];
+        }
+    }
+
+    return [
+        'is_valid'          => $allSufficient,
+        'total_items'       => count($items),
+        'insufficient_items'=> count($issues),
+        'issues'            => $issues,
+        'warning'           => !$allSufficient
+            ? 'Beberapa produk stok tidak mencukupi.'
+            : null,
+    ];
+}
 
     /**
      * ✅ NEW: Endpoint untuk check stock sebelum create/update PO

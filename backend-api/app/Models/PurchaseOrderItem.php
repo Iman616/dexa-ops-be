@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use App\Services\StockHelper;
 use Illuminate\Support\Facades\Cache;
 
 class PurchaseOrderItem extends Model
@@ -73,34 +74,20 @@ class PurchaseOrderItem extends Model
      * ✅ NEW: Get available stock for this item (cached)
      * Only queries when needed, cached for 5 minutes
      */
-    public function getAvailableStock($companyId = null)
-    {
-        if (!$this->product_id) {
-            return 0;
-        }
+public function getAvailableStock($companyId = null)
+{
+    if (!$this->product_id) return 0;
 
-        // Get company_id from PO if not provided
-        if (!$companyId) {
-            $this->loadMissing('purchaseOrder:po_id,company_id');
-            $companyId = $this->purchaseOrder?->company_id;
-        }
-
-        if (!$companyId) {
-            return 0;
-        }
-
-        // Cache key
-        $cacheKey = "stock_available_{$this->product_id}_{$companyId}";
-
-        // Cache for 5 minutes
-        return Cache::remember($cacheKey, 300, function () use ($companyId) {
-            return DB::table('stock_batches')
-                ->where('product_id', $this->product_id)
-                ->where('company_id', $companyId)
-                ->where('status', 'active')
-                ->sum('quantity_available') ?? 0;
-        });
+    if (!$companyId) {
+        $this->loadMissing('purchaseOrder:po_id,company_id');
+        $companyId = $this->purchaseOrder?->company_id;
     }
+
+    if (!$companyId) return 0;
+
+    // ✅ Real-time (sinkron dengan StockBatchController::realTimeStock)
+    return StockHelper::getAvailableByProduct($this->product_id, $companyId);
+}
 
     /**
      * ✅ NEW: Check stock status
@@ -144,27 +131,14 @@ class PurchaseOrderItem extends Model
      * ✅ NEW: Batch preload stock for multiple items
      * Prevents N+1 queries
      */
-    public static function preloadStockData($items, $companyId)
-    {
-        if ($items->isEmpty()) {
-            return [];
-        }
+public static function preloadStockData($items, $companyId)
+{
+    if ($items->isEmpty()) return [];
 
-        $productIds = $items->pluck('product_id')->unique()->filter();
-
-        if ($productIds->isEmpty()) {
-            return [];
-        }
-
-        // Single query for all products
-        $stockData = DB::table('stock_batches')
-            ->whereIn('product_id', $productIds)
-            ->where('company_id', $companyId)
-            ->where('status', 'active')
-            ->select('product_id', DB::raw('SUM(quantity_available) as total_available'))
-            ->groupBy('product_id')
-            ->pluck('total_available', 'product_id');
-
-        return $stockData;
-    }
+    // ✅ Pakai StockHelper
+    return \App\Services\StockHelper::getAvailableByProducts(
+        $items->pluck('product_id')->unique()->filter(),
+        $companyId
+    );
+}
 }

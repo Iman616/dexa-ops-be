@@ -108,6 +108,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/{id}', [ProductController::class, 'show']);
     Route::put('/{id}', [ProductController::class, 'update']);
     Route::delete('/{id}', [ProductController::class, 'destroy']);
+
+    Route::get('/{productId}/suppliers',        [SupplierPurchaseOrderController::class, 'suppliersForProduct']);
+    Route::post('/{productId}/suppliers',       [SupplierPurchaseOrderController::class, 'assignSupplierToProduct']);
     
     // Dropdown options
     Route::get('/options/categories', [ProductController::class, 'categories']);
@@ -267,24 +270,7 @@ Route::prefix('supplier-invoices')->middleware('auth:sanctum')->group(function (
     Route::delete('/{id}', [TaxController::class, 'destroy']);
 });
 
- Route::prefix('po-agen-tracking')->group(function () {
-        Route::get('/', [PurchaseOrderAgentTrackingController::class, 'index']);
-        Route::post('/', [PurchaseOrderAgentTrackingController::class, 'store']);
-        Route::post('/bulk', [PurchaseOrderAgentTrackingController::class, 'bulkStore']);
-        Route::get('/{id}', [PurchaseOrderAgentTrackingController::class, 'show']);
-        Route::put('/{id}', [PurchaseOrderAgentTrackingController::class, 'update']);
-        Route::delete('/{id}', [PurchaseOrderAgentTrackingController::class, 'destroy']);
-        
-        // Get by PO item
-        Route::get('/po-item/{poItemId}', [PurchaseOrderAgentTrackingController::class, 'getByPoItem']);
-        
-        // Get summary by PO
-        Route::get('/summary/po/{poId}', [PurchaseOrderAgentTrackingController::class, 'getSummaryByPo']);
-        
-        // Status updates
-        Route::post('/{id}/mark-ordered', [PurchaseOrderAgentTrackingController::class, 'markAsOrdered']);
-        Route::post('/{id}/mark-delivered', [PurchaseOrderAgentTrackingController::class, 'markAsDelivered']);
-    });
+
 
 // Purchase Orders
 Route::prefix('purchase-orders')->group(function () {
@@ -299,6 +285,9 @@ Route::prefix('purchase-orders')->group(function () {
     Route::get('/{id}/pdf', [PurchaseOrderController::class, 'generatePdf']);
     Route::post('/{id}/upload-customer-po', [PurchaseOrderController::class, 'uploadPoCustomerFile']);
     Route::get('/{id}/download-customer-po', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
+
+    Route::post('/{id}/check-shortage',  [SupplierPurchaseOrderController::class, 'checkShortage']);
+    Route::post('/{id}/auto-procure',    [SupplierPurchaseOrderController::class, 'autoProcure']);
 });
 
 Route::prefix('tender-documents')->middleware(['auth:sanctum'])->group(function () {

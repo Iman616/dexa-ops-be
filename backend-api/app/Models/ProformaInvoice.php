@@ -29,32 +29,34 @@ class ProformaInvoice extends Model
     protected $table = 'proforma_invoices';
     protected $primaryKey = 'proforma_id';
 
-    protected $fillable = [
-        'company_id',
-        'customer_id',
-        'po_id',
-        'proforma_number',
-        'proforma_date',
-        'valid_until',
-        'subtotal',
-        'tax_percentage',
-        'tax_amount',
-        'discount_amount',
-        'total_amount',
-        'status',
-        'notes',
-        'signed_name',
-        'signed_position',
-        'signed_city',
-        'signed_at',
-        'issued_by',
-        'issued_at',
-        'created_by',
-        'approved_by',
-        'approved_at',
-        'converted_to_invoice_id',
-        'converted_at',
-    ];
+ protected $fillable = [
+    'company_id',
+    'customer_id',
+    'po_id',
+    'proforma_number',
+    'proforma_date',
+    'valid_until',
+    'subtotal',
+    'tax_percentage',
+    'tax_amount',
+    'discount_amount',
+    'total_amount',
+    'status',
+    'notes',
+    'signed_name',
+    'signed_position',
+    'signed_city',
+    'signed_at',
+    'signature_image',   // ✅ tambah ini
+    'issued_by',
+    'issued_at',
+    'created_by',
+    'approved_by',
+    'approved_at',
+    'converted_to_invoice_id',
+    'converted_at',
+];
+
 
     protected $casts = [
         'subtotal' => 'decimal:2',
@@ -85,15 +87,6 @@ class ProformaInvoice extends Model
         return $this->hasMany(ProformaInvoiceItem::class, 'proforma_id', 'proforma_id');
     }
 
-    public function creator(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'created_by', 'user_id');
-    }
-
-    public function approver(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'approved_by', 'user_id');
-    }
 
     // ==================== ACCESSORS ====================
 
@@ -206,4 +199,48 @@ class ProformaInvoice extends Model
             ];
         }
     }
+
+    // ✅ Primary name
+public function createdBy(): BelongsTo
+{
+    return $this->belongsTo(User::class, 'created_by', 'user_id');
+}
+
+// ✅ Alias
+public function creator(): BelongsTo
+{
+    return $this->createdBy();
+}
+
+// ✅ Primary name
+public function approvedBy(): BelongsTo
+{
+    return $this->belongsTo(User::class, 'approved_by', 'user_id');
+}
+
+// ✅ Alias
+public function approver(): BelongsTo
+{
+    return $this->approvedBy();
+}
+
+// ✅ Issued by
+public function issuedBy(): BelongsTo
+{
+    return $this->belongsTo(User::class, 'issued_by', 'user_id');
+}
+
+public function purchaseOrder(): BelongsTo
+{
+    return $this->belongsTo(PurchaseOrder::class, 'po_id', 'po_id');
+}
+
+// Tambahkan di bagian RELATIONSHIPS
+
+public function invoices(): HasMany
+{
+    return $this->hasMany(Invoice::class, 'proforma_invoice_id', 'proforma_id');
+}
+
+
 }

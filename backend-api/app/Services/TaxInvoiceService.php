@@ -238,34 +238,39 @@ class TaxInvoiceService
     /**
      * Approve tax invoice
      */
-    public function approve(int $taxInvoiceId): TaxInvoice
-    {
-        return DB::transaction(function () use ($taxInvoiceId) {
-            $taxInvoice = TaxInvoice::findOrFail($taxInvoiceId);
+  // Di TaxInvoiceService::approve — tambah setelah update status
+public function approve(int $taxInvoiceId): TaxInvoice
+{
+    return DB::transaction(function () use ($taxInvoiceId) {
+        $taxInvoice = TaxInvoice::with('invoice')->findOrFail($taxInvoiceId);
 
-            if (!$taxInvoice->canApprove()) {
-                throw new \Exception('Cannot approve tax invoice with status: ' . $taxInvoice->status);
-            }
+        if (!$taxInvoice->canApprove()) {
+            throw new \Exception('Cannot approve tax invoice with status: ' . $taxInvoice->status);
+        }
 
-            $taxInvoice->update([
-                'status' => 'approved',
-                'approved_at' => now(),
-                'approved_by' => Auth::id(),
-            ]);
+        $taxInvoice->update([
+            'status'      => 'approved',
+            'approved_at' => now(),
+            'approved_by' => Auth::id(),
+        ]);
 
-            // Log activity
-            ActivityLog::create([
-                'user_id' => Auth::id(),
-                'action' => 'approve',
-                'module' => 'tax_invoices',
-                'record_id' => $taxInvoice->tax_invoice_id,
-                'description' => "Tax Invoice approved: {$taxInvoice->tax_invoice_number}",
-                'ip_address' => request()->ip(),
-            ]);
+        // ✅ TAMBAH: Update invoice updated_at agar FE bisa detect perubahan
+        if ($taxInvoice->invoice) {
+            $taxInvoice->invoice->touch();
+        }
 
-            return $taxInvoice->fresh();
-        });
-    }
+        ActivityLog::create([
+            'user_id'     => Auth::id(),
+            'action'      => 'approve',
+            'module'      => 'tax_invoices',
+            'record_id'   => $taxInvoice->tax_invoice_id,
+            'description' => "Tax Invoice approved: {$taxInvoice->tax_invoice_number}",
+            'ip_address'  => request()->ip(),
+        ]);
+
+        return $taxInvoice->fresh(['invoice']);
+    });
+}
 
     /**
      * Reject tax invoice

@@ -1,311 +1,426 @@
 <!DOCTYPE html>
 <html lang="id">
-
 <head>
   <meta charset="UTF-8">
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Proforma Invoice - {{ $proforma->proforma_number }}</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
       font-family: Arial, sans-serif;
       font-size: 11px;
       color: #000;
-      padding: 20px;
+      padding: 25px 30px;
     }
 
-    .header {
-      margin-bottom: 30px;
-    }
-
-    .header h1 {
-      font-size: 18px;
-      font-weight: bold;
-      text-align: center;
-      margin-bottom: 20px;
-    }
-
-    .invoice-info {
-      margin-bottom: 15px;
-    }
-
-    .invoice-info table {
+    /* =========================================================
+       HEADER : Logo kiri + Info perusahaan kanan
+    ========================================================= */
+    .header-wrapper {
+      display: table;
       width: 100%;
-      margin-bottom: 10px;
+      margin-bottom: 6px;
+    }
+    .header-logo {
+      display: table-cell;
+      width: 160px;
+      vertical-align: middle;
+      padding-right: 15px;
+    }
+    .header-logo img {
+      max-width: 150px;
+      height: auto;
+    }
+    .header-divider {
+      display: table-cell;
+      width: 4px;
+      background-color: #c00;   /* Garis merah vertikal seperti di PDF */
+      vertical-align: top;
+    }
+    .header-company {
+      display: table-cell;
+      vertical-align: middle;
+      padding-left: 15px;
+    }
+    .header-company .company-name {
+      font-size: 22px;
+      font-weight: bold;
+      color: #003087;           /* Biru navy seperti di PDF */
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .header-company .company-detail {
+      font-size: 9.5px;
+      line-height: 1.6;
+      color: #333;
+    }
+    .header-npwp {
+      text-align: right;
+      font-size: 10px;
+      font-weight: bold;
+      margin-top: 4px;
+      border-top: 2px solid #c00;
+      padding-top: 3px;
     }
 
-    .invoice-info td {
-      padding: 3px 0;
+    /* =========================================================
+       TITLE
+    ========================================================= */
+    .invoice-title {
+      text-align: center;
+      margin: 22px 0 18px;
+    }
+    .invoice-title h2 {
+      font-size: 15px;
+      font-weight: bold;
+      letter-spacing: 6px;
+      text-decoration: underline;
+      text-underline-offset: 4px;
     }
 
-    .invoice-info .label {
-      width: 100px;
-      font-weight: normal;
+    /* =========================================================
+       INFO BARIS : Nomor/Tanggal | No. Surat Pesanan/Paket
+    ========================================================= */
+    .info-row {
+      width: 100%;
+      margin-bottom: 16px;
     }
+    .info-row table { width: 100%; }
+    .info-row td { vertical-align: top; padding: 1px 0; font-size: 11px; }
+    .info-row .info-label { font-weight: bold; width: 70px; }
+    .info-row .info-colon { width: 12px; }
 
-    .invoice-info .colon {
-      width: 20px;
+    /* =========================================================
+       CUSTOMER BOX
+    ========================================================= */
+    .customer-box {
+      width: 100%;
+      border: 1px solid #000;
+      border-collapse: collapse;
+      margin-bottom: 16px;
+      font-size: 11px;
     }
-
-    .customer-section {
-      margin-bottom: 20px;
+    .customer-box td {
+      padding: 6px 10px;
+      vertical-align: top;
     }
-
-    .customer-section p {
-      margin: 3px 0;
+    .customer-box .customer-left {
+      width: 50%;
+      border-right: 1px solid #000;
     }
+    .customer-box .right-label {
+      font-weight: bold;
+      white-space: nowrap;
+      padding-right: 6px;
+    }
+    .customer-box .right-colon { padding: 0 4px; }
 
+    /* =========================================================
+       ITEMS TABLE
+    ========================================================= */
     .items-table {
       width: 100%;
       border-collapse: collapse;
-      margin-bottom: 20px;
+      font-size: 10px;
+      margin-bottom: 0;
     }
-
-    .items-table th {
+    .items-table th, .items-table td {
       border: 1px solid #000;
-      padding: 8px;
-      background-color: #f0f0f0;
+      padding: 5px 6px;
+    }
+    .items-table thead tr th {
+      background-color: #f2f2f2;
+      text-align: center;
       font-weight: bold;
-      text-align: center;
-      font-size: 10px;
     }
+    /* Baris header atas (QTY spanning 2 kolom) */
+    .items-table .th-qty { text-align: center; }
+    /* Baris header bawah (Vol | Satuan) */
+    .items-table .th-sub { font-size: 9px; }
 
-    .items-table td {
-      border: 1px solid #000;
-      padding: 6px;
-      font-size: 10px;
-    }
+    .items-table td.center { text-align: center; }
+    .items-table td.right  { text-align: right; white-space: nowrap; }
 
-    .items-table td.center {
-      text-align: center;
-    }
-
-    .items-table td.right {
-      text-align: right;
-    }
-
-    .totals-section {
+    /* =========================================================
+       TOTAL SECTION (rata kanan)
+    ========================================================= */
+    .total-wrapper {
       width: 100%;
-      margin-bottom: 30px;
-    }
-
-    .totals-table {
-      width: 350px;
-      margin-left: auto;
       border-collapse: collapse;
     }
-
-    .totals-table td {
-      padding: 5px 10px;
-      font-size: 11px;
+    .total-wrapper .total-inner {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid #000;
+      border-top: none; /* menyambung dari tabel items */
     }
-
-    .totals-table .label {
-      text-align: left;
-      width: 200px;
+    .total-inner td {
+      padding: 4px 8px;
+      font-size: 10.5px;
+      border: none;
     }
+    .total-inner tr { border-top: 1px solid #aaa; }
+    .total-inner .t-label { text-align: right; font-weight: bold; width: 82%; border-right: 1px solid #000; }
+    .total-inner .t-value { text-align: right; white-space: nowrap; }
+    .total-inner .t-grand .t-label,
+    .total-inner .t-grand .t-value { font-weight: bold; }
+    /* baris subtotal – label rata kanan menyambung dari kolom Jumlah */
 
-    .totals-table .amount {
-      text-align: right;
-      width: 150px;
-    }
-
-    .totals-table .total-row {
-      font-weight: bold;
-      border-top: 1px solid #000;
-    }
-
-    .bank-info {
-      margin-bottom: 20px;
-      padding: 10px;
-      background-color: #f9f9f9;
-      border: 1px solid #ddd;
-    }
-
-    .bank-info p {
-      margin: 3px 0;
-      font-size: 10px;
-    }
-
-    .bank-info .bank-label {
-      font-weight: bold;
-      display: inline-block;
-      width: 80px;
-    }
-
-    .signature-section {
-      margin-top: 40px;
-    }
-
-    .signature-box {
-      text-align: right;
-    }
-
-    .signature-box p {
-      margin: 3px 0;
-    }
-
-    .signature-space {
-      height: 60px;
-    }
-
-    .signature-name {
-      font-weight: bold;
-      text-decoration: underline;
-    }
-
-    .notes-section {
-      margin-top: 20px;
+    /* =========================================================
+       TERBILANG
+    ========================================================= */
+    .terbilang-row td {
+      border: 1px solid #000;
+      padding: 5px 8px;
       font-size: 10px;
       font-style: italic;
+      font-weight: bold;
     }
 
-    .format-currency {
-      white-space: nowrap;
+    /* =========================================================
+       BANK INFO
+    ========================================================= */
+    .bank-section {
+      margin-top: 18px;
+      font-size: 10.5px;
+      line-height: 1.8;
     }
+    .bank-section strong { display: inline-block; }
+
+    /* =========================================================
+       SIGNATURE
+    ========================================================= */
+    .signature-section {
+      margin-top: 36px;
+      text-align: left;
+      font-size: 11px;
+    }
+    .signature-section .sig-city { margin-bottom: 4px; }
+    .signature-section .sig-space { height: 70px; }
+    .signature-section .sig-name {
+      font-weight: bold;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    .signature-section .sig-position { margin-top: 2px; }
   </style>
 </head>
-
 <body>
-  <!-- Header -->
-  <div class="header">
-    <h1>PROFORMA INVOICE</h1>
 
-    <div class="invoice-info">
-      <table>
-        <tr>
-          <td class="label">Nomor</td>
-          <td class="colon">:</td>
-          <td><strong>{{ $proforma->proforma_number }}</strong></td>
-        </tr>
-        <tr>
-          <td class="label">Tanggal</td>
-          <td class="colon">:</td>
-          <td>{{ \Carbon\Carbon::parse($proforma->proforma_date)->format('d F Y') }}</td>
-        </tr>
-      </table>
-    </div>
+  {{-- =========================================================
+       HEADER : Logo + Nama Perusahaan
+  ========================================================= --}}
+  <div class="header-wrapper">
+    <div style="text-align:center; margin-bottom:25;">
 
-    <div class="customer-section">
-      <p><strong>Kepada Yth:</strong></p>
-      <p><strong>{{ strtoupper($proforma->customer_name) }}</strong></p>
+@if($company->logo_base64)
+  <img
+      src="{{ $company->logo_base64 }}"
+      style="width:750px; height:auto;"
+      alt="Logo 
+    >@endif
+</div>
 
-      @if ($proforma->customer_address)
-        <p>{{ $proforma->customer_address }}</p>
-      @endif
-      @if ($proforma->customer_address)
-        <p>{{ $proforma->customer_address }}</p>
-      @endif
-    </div>
+    {{-- Garis merah vertikal --}}
+    <div class="header-divider"></div>
+
+ 
   </div>
 
-  <!-- Items Table -->
-  <table class="items-table">
-    <thead>
-      <tr>
-        <th style="width: 30px;">No</th>
-        <th style="width: 150px;">Jenis Barang</th>
-        <th>Spesifikasi</th>
-        <th style="width: 50px;">QTY</th>
-        <th style="width: 60px;">Satuan</th>
-        <th style="width: 80px;">Vol</th>
-        <th style="width: 60px;">Satuan</th>
-        <th style="width: 90px;">Jumlah<br />(Rp)</th>
-      </tr>
-    </thead>
-    <tbody>
-      @foreach ($items as $index => $item)
-        <tr>
-          <td class="center">{{ $index + 1 }}</td>
-          <td>{{ $item->product_name }}</td>
-          <td>{{ $item->product_description ?? $item->product_code }}</td>
-          <td class="center">{{ number_format($item->quantity, 0) }}</td>
-          <td class="center">{{ $item->unit }}</td>
-          <td class="right format-currency">Rp {{ number_format($item->unit_price, 0, ',', '.') }}</td>
-          <td class="center">{{ $item->unit }}</td>
-          <td class="right format-currency">Rp {{ number_format($item->quantity * $item->unit_price, 0, ',', '.') }}</td>
-        </tr>
-      @endforeach
-    </tbody>
-  </table>
+  {{-- =========================================================
+       TITLE
+  ========================================================= --}}
+  <div class="invoice-title">
+    <h2>P R O F O R M A &nbsp;&nbsp; I N V O I C E</h2>
+  </div>
 
-  <!-- Totals Section -->
-  <div class="totals-section">
-    <table class="totals-table">
+  {{-- =========================================================
+       NOMOR / TANGGAL  |  NO. SURAT PESANAN / PAKET PEKERJAAN
+  ========================================================= --}}
+  <div class="info-row">
+    <table>
       <tr>
-        <td class="label">Subtotal</td>
-        <td class="amount format-currency">Rp {{ number_format($subtotal, 0, ',', '.') }}</td>
-      </tr>
-      <tr>
-        <td class="label">DPP Lainnya (Konversi 11/12)</td>
-        <td class="amount format-currency">Rp {{ number_format($dpp_lainnya, 0, ',', '.') }}</td>
-      </tr>
-      <tr>
-        <td class="label">PPN {{ number_format($proforma->tax_percentage, 0) }}%</td>
-        <td class="amount format-currency">Rp {{ number_format($ppn, 0, ',', '.') }}</td>
-      </tr>
-      @if ($proforma->discount_amount > 0)
-        <tr>
-          <td class="label">Diskon</td>
-          <td class="amount format-currency">- Rp {{ number_format($proforma->discount_amount, 0, ',', '.') }}</td>
-        </tr>
-      @endif
-      <tr class="total-row">
-        <td class="label"><strong>Total</strong></td>
-        <td class="amount format-currency"><strong>Rp {{ number_format($total, 0, ',', '.') }}</strong></td>
+        <td style="width:50%; vertical-align:top;">
+          <table>
+            <tr>
+              <td class="info-label">Nomor</td>
+              <td class="info-colon">:</td>
+              <td><strong>{{ $proforma->proforma_number }}</strong></td>
+            </tr>
+            <tr>
+              <td class="info-label">Tanggal</td>
+              <td class="info-colon">:</td>
+              <td><strong>{{ \Carbon\Carbon::parse($proforma->proforma_date)->translatedFormat('d F Y') }}</strong></td>
+            </tr>
+          </table>
+        </td>
+       
       </tr>
     </table>
   </div>
 
-  <!-- Bank Information -->
-  <div class="bank-info">
-    <p><strong>Please remit the above amount to:</strong></p>
-    <p><span class="bank-label">An.</span> {{ strtoupper($company->company_name) }}</p>
-    <p><strong>account with:</strong></p>
-    @if ($company->bank_name)
-      <p><span class="bank-label">Bank</span>: {{ $company->bank_name }}</p>
+  {{-- =========================================================
+       CUSTOMER BOX
+  ========================================================= --}}
+  <table class="customer-box">
+    <tr>
+      {{-- Kolom kiri: nama & alamat customer --}}
+      <td class="customer-left">
+        <div style="font-weight:bold; margin-bottom:3px;">Kepada Yth:</div>
+        <div style="font-weight:bold;">{{ strtoupper($proforma->customer_name) }}</div>
+        @if($proforma->customer_address)
+          <div>{{ $proforma->customer_address }}</div>
+        @endif
+      </td>
+
+      {{-- Kolom kanan: no surat pesanan & paket --}}
+      <td>
+        <table style="width:100%;">
+          @if(!empty($proforma->po_number))
+          <tr>
+            <td class="right-label">No. Surat Pesanan</td>
+            <td class="right-colon">:</td>
+            <td>{{ $proforma->po_number }}</td>
+          </tr>
+          @endif
+          @if(!empty($proforma->project_name))
+          <tr>
+            <td class="right-label">Paket Pekerjaan</td>
+            <td class="right-colon">:</td>
+            <td>{{ $proforma->project_name }}</td>
+          </tr>
+          @endif
+        </table>
+      </td>
+    </tr>
+  </table>
+
+  {{-- =========================================================
+       ITEMS TABLE
+       Header: No | Jenis Barang | Spesifikasi | QTY(Vol/Satuan) | Satuan(Rp) | Jumlah(Rp)
+  ========================================================= --}}
+  <table class="items-table">
+    <thead>
+      {{-- Baris 1: header utama --}}
+      <tr>
+        <th rowspan="2" style="width:28px;">No</th>
+        <th rowspan="2" style="width:150px;">Jenis Barang</th>
+        <th rowspan="2">Spesifikasi</th>
+        <th colspan="2" class="th-qty">QTY</th>
+        <th rowspan="2" style="width:88px;">
+          Satuan<br><span style="font-size:9px;">(Rp)</span>
+        </th>
+        <th rowspan="2" style="width:100px;">
+          Jumlah<br><span style="font-size:9px;">(Rp)</span>
+        </th>
+      </tr>
+      {{-- Baris 2: sub-header QTY --}}
+      <tr>
+        <th class="th-sub" style="width:38px;">Vol</th>
+        <th class="th-sub" style="width:52px;">Satuan</th>
+      </tr>
+    </thead>
+    <tbody>
+      @foreach($items as $index => $item)
+      <tr>
+        <td class="center">{{ $index + 1 }}</td>
+        <td>{{ $item->product_name }}</td>
+        <td class="center">{{ $item->product_description ?? $item->product_code }}</td>
+        <td class="center">{{ number_format($item->quantity, 0) }}</td>
+        <td class="center">{{ $item->unit }}</td>
+        <td class="right">Rp {{ number_format($item->unit_price, 0, ',', '.') }}</td>
+        <td class="right">Rp {{ number_format($item->quantity * $item->unit_price, 0, ',', '.') }}</td>
+      </tr>
+      @endforeach
+
+      {{-- Baris Subtotal --}}
+      <tr>
+        <td colspan="6" style="text-align:right; font-weight:bold; border-right:1px solid #000;">
+          Subtotal
+        </td>
+        <td class="right" style="font-weight:bold;">
+          Rp {{ number_format($subtotal, 0, ',', '.') }}
+        </td>
+      </tr>
+
+      {{-- Baris PPN --}}
+      <tr>
+        <td colspan="6" style="text-align:right; font-weight:bold; border-right:1px solid #000;">
+          PPN {{ number_format($proforma->tax_percentage, 0) }}%
+        </td>
+        <td class="right">
+          Rp {{ number_format($ppn, 0, ',', '.') }}
+        </td>
+      </tr>
+
+      {{-- Baris Diskon (opsional) --}}
+      @if(!empty($proforma->discount_amount) && $proforma->discount_amount > 0)
+      <tr>
+        <td colspan="6" style="text-align:right; font-weight:bold; border-right:1px solid #000;">
+          Diskon
+        </td>
+        <td class="right">
+          - Rp {{ number_format($proforma->discount_amount, 0, ',', '.') }}
+        </td>
+      </tr>
+      @endif
+
+      {{-- Baris Total --}}
+      <tr>
+        <td colspan="6" style="text-align:right; font-weight:bold; border-right:1px solid #000;">
+          Total
+        </td>
+        <td class="right" style="font-weight:bold;">
+          Rp {{ number_format($total, 0, ',', '.') }}
+        </td>
+      </tr>
+
+      {{-- Baris Terbilang --}}
+      <tr class="terbilang-row">
+        <td colspan="7">
+          <strong>Terbilang :</strong>&nbsp;&nbsp;{{ $terbilang ?? '' }}
+        </td>
+      </tr>
+
+    </tbody>
+  </table>
+
+  {{-- =========================================================
+       BANK INFO
+  ========================================================= --}}
+  <div class="bank-section">
+    <p>Please remit the above amount to. <strong>An. {{ strtoupper($company->company_name) }}</strong></p>
+    <p>account with :</p>
+    @if($company->bank_name)
+      <p>Bank &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: {{ $company->bank_name }}</p>
     @endif
-    @if ($company->bank_account)
-      <p><span class="bank-label">Account</span>: {{ $company->bank_account }} (IDR)</p>
+    @if($company->bank_account)
+      <p>Account : {{ $company->bank_account }} (IDR)</p>
     @endif
   </div>
 
-  <!-- Signature Section -->
+  {{-- =========================================================
+       SIGNATURE
+  ========================================================= --}}
   <div class="signature-section">
-    <div class="signature-box">
-      <p>{{ $company->city ?? 'Bogor' }}, {{ \Carbon\Carbon::parse($proforma->proforma_date)->format('d F Y') }}</p>
-      <div class="signature-space"></div>
-      <p class="signature-name">{{ $proforma->creator_name ?? $company->pic_name }}</p>
+    <p class="sig-city">
+      {{ $company->city ?? $proforma->signed_city ?? 'Bogor' }},
+      {{ \Carbon\Carbon::parse($proforma->proforma_date)->translatedFormat('d F Y') }}
+    </p>
+
+    <div class="sig-space">
+      @if($proforma->signature_image_base64)
+        <img src="{{ $proforma->signature_image_base64 }}" height="65" style="margin-top:4px;">
+      @endif
     </div>
+
+    <p class="sig-name">{{ $proforma->signed_name ?? $proforma->creator_name ?? $company->pic_name }}</p>
+
+    @if($proforma->signed_position)
+      <p class="sig-position">{{ $proforma->signed_position }}</p>
+    @endif
   </div>
 
-  <!-- Notes -->
-  @if ($proforma->notes)
-    <div class="notes-section">
-      <p><strong>Notes:</strong></p>
-      <p>{{ $proforma->notes }}</p>
-    </div>
-  @endif
-
-  @if ($proforma->payment_terms)
-    <div class="notes-section">
-      <p><strong>Payment Terms:</strong> {{ $proforma->payment_terms }}</p>
-    </div>
-  @endif
-
-  @if ($proforma->delivery_terms)
-    <div class="notes-section">
-      <p><strong>Delivery Terms:</strong> {{ $proforma->delivery_terms }}</p>
-    </div>
-  @endif
 </body>
-
 </html>

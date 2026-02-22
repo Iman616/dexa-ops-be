@@ -3,7 +3,10 @@
 
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
   <title>Purchase Order - {{ $po->po_number }}</title>
   <style>
     * {
@@ -68,13 +71,13 @@
     }
 
     .info-right {
-    display: table-cell;
-    width: 50%;
-    vertical-align: top;
-    padding-left: 30px;
-    font-size: 9pt;
-    text-align: right;  
-  }
+      display: table-cell;
+      width: 50%;
+      vertical-align: top;
+      padding-left: 30px;
+      font-size: 9pt;
+      text-align: right;
+    }
 
     .info-label {
       display: inline-block;
@@ -180,7 +183,10 @@
     <!-- Header / Kop Surat dengan Border -->
     <div class="header-section">
       @if ($company->logo_path)
-        <img src="{{ public_path('storage/' . $company->logo_path) }}" alt="Logo Company">
+        <img
+          src="{{ public_path('storage/' . $company->logo_path) }}"
+          alt="Logo Company"
+        >
       @endif
     </div>
 
@@ -190,70 +196,70 @@
     </div>
 
     <!-- Customer and PO Info - Two Columns Layout -->
-  <!-- Customer and PO Info - Two Columns Layout -->
-<div class="info-section">
-  <!-- Row 1 -->
-  <div class="info-row">
-    <div class="info-left">
-      <span class="info-label">To</span>: <strong>{{ $customer->customer_name }}</strong>
-    </div>
-    <div class="info-right">
-      Date Purchase&nbsp;&nbsp;&nbsp;: {{ \App\Services\PurchaseOrderPdfService::formatDate($po->po_date) }}
-    </div>
-  </div>
+    <!-- Customer and PO Info - Two Columns Layout -->
+    <div class="info-section">
+      <!-- Row 1 -->
+      <div class="info-row">
+        <div class="info-left">
+          <span class="info-label">To</span>: <strong>{{ $customer->customer_name }}</strong>
+        </div>
+        <div class="info-right">
+          Date Purchase&nbsp;&nbsp;&nbsp;: {{ \App\Services\PurchaseOrderPdfService::formatDate($po->po_date) }}
+        </div>
+      </div>
 
-  <!-- Row 2 -->
-  <div class="info-row">
-    <div class="info-left">
-      <span class="info-label"></span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ $customer->address ?? '' }}
-    </div>
-    <div class="info-right">
-      Number Purchase : {{ $po->po_number }}
-    </div>
-  </div>
+      <!-- Row 2 -->
+      <div class="info-row">
+        <div class="info-left">
+          <span class="info-label"></span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ $customer->address ?? '' }}
+        </div>
+        <div class="info-right">
+          Number Purchase : {{ $po->po_number }}
+        </div>
+      </div>
 
-  <!-- Row 3 -->
-  <div class="info-row">
-    <div class="info-left">
-      <span class="info-label"></span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ $customer->city ?? '' }}{{ $customer->province ? ', ' . $customer->province : '' }}
-    </div>
-    <div class="info-right">
-      &nbsp;
-    </div>
-  </div>
+      <!-- Row 3 -->
+      <div class="info-row">
+        <div class="info-left">
+          <span class="info-label"></span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ $customer->city ?? '' }}{{ $customer->province ? ', ' . $customer->province : '' }}
+        </div>
+        <div class="info-right">
+          &nbsp;
+        </div>
+      </div>
 
-  <!-- Row 4 -->
-  <div class="info-row">
-    <div class="info-left">
-      <span class="info-label">Up</span>: {{ $customer->contact_person ?? '-' }}
-    </div>
-    <div class="info-right">
-      Contact person&nbsp;&nbsp;: {{ $customer->contact_person ?? '-' }}
-    </div>
-  </div>
+      <!-- Row 4 -->
+      <div class="info-row">
+        <div class="info-left">
+          <span class="info-label">Up</span>: {{ $customer->contact_person ?? '-' }}
+        </div>
+        <div class="info-right">
+          Contact person&nbsp;&nbsp;: {{ $customer->contact_person ?? '-' }}
+        </div>
+      </div>
 
-  <!-- Row 5 -->
-  <div class="info-row">
-    <div class="info-left">
-      <span class="info-label">Tlp/Fax</span>: {{ $customer->phone ?? '-' }}
+      <!-- Row 5 -->
+      <div class="info-row">
+        <div class="info-left">
+          <span class="info-label">Tlp/Fax</span>: {{ $customer->phone ?? '-' }}
+        </div>
+        <div class="info-right">
+          Phone&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: {{ $customer->phone ?? '-' }}
+        </div>
+      </div>
+
+      <!-- Row 6 - Phone line 2 jika ada -->
+      @if ($customer->phone2)
+        <div class="info-row">
+          <div class="info-left">
+            &nbsp;
+          </div>
+          <div class="info-right">
+            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ $customer->phone2 }}
+          </div>
+        </div>
+      @endif
     </div>
-    <div class="info-right">
-      Phone&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: {{ $customer->phone ?? '-' }}
-    </div>
-  </div>
-  
-  <!-- Row 6 - Phone line 2 jika ada -->
-  @if ($customer->phone2)
-  <div class="info-row">
-    <div class="info-left">
-      &nbsp;
-    </div>
-    <div class="info-right">
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{{ $customer->phone2 }}
-    </div>
-  </div>
-  @endif
-</div>
 
     <!-- Opening Text -->
     <div class="opening-text">
@@ -265,52 +271,93 @@
     </div>
 
     <!-- Items Table -->
-  <!-- Items Table -->
-<table class="items-table">
-  <thead>
-    <tr>
-      <th style="width: 4%;" rowspan="2">No</th>
-      <th style="width: 26%;" rowspan="2">Nama Barang</th>
-      <th style="width: 16%;" rowspan="2">Katalog</th>
-      <th style="width: 10%;" colspan="2">Jumlah</th>
-      <th style="width: 16%;" rowspan="2">Harga Satuan</th>
-      <th style="width: 10%;" rowspan="2">Diskon</th>
-      <th style="width: 18%;" rowspan="2">Total Harga</th>
-    </tr>
-    <tr>
-      <th style="width: 6%; border-left: 1px solid #000;">Qty</th>
-      <th style="width: 4%; border-left: 1px solid #000;">Unit</th>
-    </tr>
-  </thead>
-  <tbody>
-    @foreach ($items as $index => $item)
-      <tr>
-        <td class="text-center">{{ $index + 1 }}</td>
-        <td class="text-left">{{ $item->product_name }}</td>
-        <td class="text-left">{{ $item->specification ?? '-' }}</td>
-        <td class="text-center" style="border-right: none;">{{ number_format($item->quantity, 0, ',', '.') }}</td>
-        <td class="text-center" style="border-left: 1px solid #000;">{{ $item->unit }}</td>
-        <td class="text-right">Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($item->unit_price, 0, ',', '.') }}</td>
-        <td class="text-center">{{ number_format($item->discount_percent, 1, ',', '.') }}%</td>
-        <td class="text-right">Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($item->total, 0, ',', '.') }}</td>
-      </tr>
-    @endforeach
+    <!-- Items Table -->
+    <table class="items-table">
+      <thead>
+        <tr>
+          <th
+            style="width: 4%;"
+            rowspan="2"
+          >No</th>
+          <th
+            style="width: 26%;"
+            rowspan="2"
+          >Nama Barang</th>
+          <th
+            style="width: 12%;"
+            rowspan="2"
+          >Brand</th> <!-- ← NEW -->
+          <th
+            style="width: 14%;"
+            rowspan="2"
+          >Katalog/Spec</th>
+          \ <th
+            style="width: 10%;"
+            colspan="2"
+          >Jumlah</th>
+          <th
+            style="width: 16%;"
+            rowspan="2"
+          >Harga Satuan</th>
+          <th
+            style="width: 10%;"
+            rowspan="2"
+          >Diskon</th>
+          <th
+            style="width: 18%;"
+            rowspan="2"
+          >Total Harga</th>
+        </tr>
+        <tr>
+          <th style="width: 6%; border-left: 1px solid #000;">Qty</th>
+          <th style="width: 4%; border-left: 1px solid #000;">Unit</th>
+        </tr>
+      </thead>
+      <tbody>
+        @foreach ($items as $index => $item)
+          <tr>
+            <td class="text-center">{{ $index + 1 }}</td>
+            <td class="text-left">{{ $item->product_name }}</td>
+            <td class="text-left">{{ $item->product->brand ?? '-' }}</td>
+            <td class="text-left">{{ $item->specification ?? '-' }}</td>
+            <td
+              class="text-center"
+              style="border-right: none;"
+            >{{ number_format($item->quantity, 0, ',', '.') }}</td>
+            <td
+              class="text-center"
+              style="border-left: 1px solid #000;"
+            >{{ $item->unit }}</td>
+            <td class="text-right">Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($item->unit_price, 0, ',', '.') }}</td>
+            <td class="text-center">{{ number_format($item->discount_percent, 1, ',', '.') }}%</td>
+            <td class="text-right">Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($item->total, 0, ',', '.') }}</td>
+          </tr>
+        @endforeach
 
-    <!-- Summary Rows -->
-    <tr class="summary-row">
-      <td colspan="7" class="text-right"><strong>Subtotal</strong></td>
-      <td class="text-right"><strong>Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($subtotal, 0, ',', '.') }}</strong></td>
-    </tr>
-    <tr class="summary-row">
-      <td colspan="7" class="text-right"><strong>PPN</strong></td>
-      <td class="text-right"><strong>Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($ppn, 0, ',', '.') }}</strong></td>
-    </tr>
-    <tr class="total-row">
-      <td colspan="7" class="text-right"><strong>Total</strong></td>
-      <td class="text-right"><strong>Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($grand_total, 0, ',', '.') }}</strong></td>
-    </tr>
-  </tbody>
-</table>
+        <!-- Summary Rows -->
+        <tr class="summary-row">
+          <td
+            colspan="7"
+            class="text-right"
+          ><strong>Subtotal</strong></td>
+          <td class="text-right"><strong>Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($subtotal, 0, ',', '.') }}</strong></td>
+        </tr>
+        <tr class="summary-row">
+          <td
+            colspan="7"
+            class="text-right"
+          ><strong>PPN</strong></td>
+          <td class="text-right"><strong>Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($ppn, 0, ',', '.') }}</strong></td>
+        </tr>
+        <tr class="total-row">
+          <td
+            colspan="7"
+            class="text-right"
+          ><strong>Total</strong></td>
+          <td class="text-right"><strong>Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($grand_total, 0, ',', '.') }}</strong></td>
+        </tr>
+      </tbody>
+    </table>
 
 
     <!-- Closing Text -->
@@ -321,21 +368,24 @@
     <!-- Signature Section -->
     <div class="signature-section">
       <div class="signature-title">Best Regards</div>
-      
+
       @if ($po->signature_image)
         <div style="margin-top: 10px;">
-          <img 
-            src="{{ public_path('storage/' . $po->signature_image) }}" 
+          <img
+            src="{{ public_path('storage/' . $po->signature_image) }}"
             class="signature-image"
             alt="Signature"
           >
         </div>
       @endif
 
-      <div class="signature-name" style="margin-top: {{ $po->signature_image ? '10px' : '60px' }};">
+      <div
+        class="signature-name"
+        style="margin-top: {{ $po->signature_image ? '10px' : '60px' }};"
+      >
         {{ $po->signed_name ?? '_______________________' }}
       </div>
-      
+
       @if ($po->signed_position)
         <div class="signature-position">
           {{ $po->signed_position }}

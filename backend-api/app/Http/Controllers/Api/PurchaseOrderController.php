@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Http\Controllers\Controller;
 use App\Models\PurchaseOrder;
 use App\Models\PurchaseOrderItem;
 use App\Models\TenderProjectDetail;
@@ -15,8 +14,11 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use App\Services\PurchaseOrderPdfService;
 use App\Services\StockHelper;
+use App\Models\Product;
+use App\Models\ProformaInvoice;
+use App\Models\ProformaInvoiceItem;
 
-class PurchaseOrderController extends Controller
+class PurchaseOrderController extends BaseController  // ✅ Extend BaseController
 {
     protected $pdfService;
 
@@ -25,195 +27,186 @@ class PurchaseOrderController extends Controller
         $this->pdfService = $pdfService;
     }
 
-  public function index(Request $request)
-{
-    $query = PurchaseOrder::select([
-        'po_id',
-        'company_id',
-        'customer_id',
-        'quotation_id',
-        'activity_type_id',
-        'po_number',
-        'po_date',
-        'valid_until',
-        'status',
-        'total_amount',
-        'created_at',
-    ]);
+    /* ================================================================
+     * INDEX
+     * ================================================================ */
+    public function index(Request $request)
+    {
+        // ✅ Auto-resolve company dari session user
 
-    // ✅ Eager load hanya kolom yang diperlukan
-    $query->with([
-        'company:company_id,company_name,company_code',
-        'customer:customer_id,customer_name',
-        'quotation:quotation_id,quotation_number',
-        'activityType:activity_type_id,type_name,type_code',
-    ]);
-    $query->withCount([
-        'items',
-        'deliveryNotes',
-        'tenderDocuments'
-    ]);
+        $companyId = $this->getCompanyId($request);
 
+        $query = PurchaseOrder::select([
+            'po_id',
+            'company_id',
+            'customer_id',
+            'quotation_id',
+            'activity_type_id',
+            'po_number',
+            'po_date',
+            'valid_until',
+            'status',
+            'total_amount',
+            'created_at',
+        ])
+            ->with([
+                'company:company_id,company_name,company_code',
+                'customer:customer_id,customer_name',
+                'quotation:quotation_id,quotation_number',
+                'activityType:activity_type_id,type_name,type_code',
+            ])
+            ->withCount(['items', 'deliveryNotes', 'tenderDocuments'])
+            ->where('company_id', $companyId); // ✅ Auto-filter
 
-        if ($request->has('company_id')) {
-            $query->where('company_id', $request->company_id);
-        }
-
-        if ($request->has('customer_id')) {
+        if ($request->filled('customer_id')) {
             $query->where('customer_id', $request->customer_id);
         }
 
-        if ($request->has('status')) {
+        if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
 
-        if ($request->has('activity_type_id')) {
+        if ($request->filled('activity_type_id')) {
             $query->where('activity_type_id', $request->activity_type_id);
         }
 
-        // ✅ NEW: Filter by tender type
-        if ($request->has('is_tender')) {
+        if ($request->filled('is_tender')) {
             $isTender = $request->boolean('is_tender');
-            if ($isTender) {
-                $query->whereHas('activityType', function($q) {
-                    $q->where('type_code', 'TENDER');
-                });
-            } else {
-                $query->whereHas('activityType', function($q) {
-                    $q->where('type_code', '!=', 'TENDER');
-                });
-            }
+            $query->whereHas(
+                'activityType',
+                fn($q) =>
+                $isTender
+                    ? $q->where('type_code', 'TENDER')
+                    : $q->where('type_code', '!=', 'TENDER')
+            );
         }
 
-        if ($request->has('search')) {
+        if ($request->filled('search')) {
             $search = $request->search;
-            $query->where(function($q) use ($search) {
+            $query->where(function ($q) use ($search) {
                 $q->where('po_number', 'like', "%{$search}%")
-                  ->orWhereHas('customer', function($cq) use ($search) {
-                      $cq->where('customer_name', 'like', "%{$search}%");
-                  });
+                    ->orWhereHas(
+                        'customer',
+                        fn($cq) =>
+                        $cq->where('customer_name', 'like', "%{$search}%")
+                    );
             });
         }
 
-        if ($request->has('date_from')) {
+        if ($request->filled('date_from')) {
             $query->where('po_date', '>=', $request->date_from);
         }
 
-        if ($request->has('date_to')) {
+        if ($request->filled('date_to')) {
             $query->where('po_date', '<=', $request->date_to);
         }
 
-        $sortBy = $request->get('sort_by', 'po_id');
-        $sortOrder = $request->get('sort_order', 'desc'); 
+        $sortBy    = $request->get('sort_by', 'po_id');
+        $sortOrder = $request->get('sort_order', 'desc');
         $query->orderBy($sortBy, $sortOrder);
 
         if ($sortBy !== 'po_id') {
             $query->orderBy('po_id', 'desc');
         }
 
-        $perPage = $request->get('per_page', 15);
+        $perPage       = $request->get('per_page', 15);
         $purchaseOrders = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
             'message' => 'Purchase orders retrieved successfully',
-            'data' => $purchaseOrders
+            'data'    => $purchaseOrders,
         ], 200);
     }
 
- /**
-     * ✅ UPDATED: Validate stock saat create PO
-     */
+    /* ================================================================
+     * STORE
+     * ================================================================ */
     public function store(Request $request)
     {
+        // ✅ Auto-resolve — tidak perlu kirim company_id dari frontend
+        $companyId = $this->getCompanyId($request);
+
         if ($request->has('items') && is_string($request->items)) {
-            $request->merge([
-                'items' => json_decode($request->items, true)
-            ]);
+            $request->merge(['items' => json_decode($request->items, true)]);
         }
 
         $validator = Validator::make($request->all(), [
-            'company_id' => 'required|exists:companies,company_id',
-            'customer_id' => 'required|exists:customers,customer_id',
-            'quotation_id' => 'nullable|exists:quotations,quotation_id',
-            'activity_type_id' => 'nullable|exists:activity_types,activity_type_id',
-            'po_number' => 'required|string|max:100|unique:purchase_orders,po_number',
-            'po_date' => 'required|date',
-            'valid_until' => 'required|string|max:200',
-            'po_file' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
-            'status' => 'nullable|in:draft,issued,sent,approved,processing,completed,cancelled,expired',
-            'notes' => 'nullable|string',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'nullable|exists:products,product_id',
-            'items.*.product_name' => 'required|string|max:255',
-            'items.*.specification' => 'nullable|string',
-            'items.*.quantity' => 'required|numeric|min:0',
-            'items.*.unit' => 'required|string|max:50',
-            'items.*.unit_price' => 'required|numeric|min:0',
+            'customer_id'              => 'required|exists:customers,customer_id',
+            'quotation_id'             => 'nullable|exists:quotations,quotation_id',
+            'activity_type_id'         => 'nullable|exists:activity_types,activity_type_id',
+            'po_number'                => 'required|string|max:100|unique:purchase_orders,po_number',
+            'po_date'                  => 'required|date',
+            'valid_until'              => 'required|string|max:200',
+            'po_file'                  => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
+            'status'                   => 'nullable|in:draft,issued,sent,approved,processing,completed,cancelled,expired',
+            'notes'                    => 'nullable|string',
+            'items'                    => 'required|array|min:1',
+            'items.*.product_id'       => 'nullable|exists:products,product_id',
+            'items.*.product_name'     => 'required|string|max:255',
+            'items.*.specification'    => 'nullable|string',
+            'items.*.quantity'         => 'required|numeric|min:0',
+            'items.*.unit'             => 'required|string|max:50',
+            'items.*.unit_price'       => 'required|numeric|min:0',
             'items.*.discount_percent' => 'nullable|numeric|min:0|max:100',
-            'items.*.notes' => 'nullable|string',
+            'items.*.notes'            => 'nullable|string',
+            'work_package'          => 'nullable|string|max:255',
+            'activity_name'         => 'nullable|string|max:255',
+            'items.*.brand'         => 'nullable|string|max:100',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
-        // ✅ NEW: Validate stock BEFORE creating PO
-        $stockValidation = $this->validateStockForItems($request->items, $request->company_id);
-        
+        // ✅ Validate stock pakai companyId dari session
+        $stockValidation = $this->validateStockForItems($request->items, $companyId);
+
         DB::beginTransaction();
         try {
             $poFilePath = null;
             if ($request->hasFile('po_file')) {
-                $file = $request->file('po_file');
-                $filename = 'PO_' . time() . '_' . $file->getClientOriginalName();
+                $file       = $request->file('po_file');
+                $filename   = 'PO_' . time() . '_' . $file->getClientOriginalName();
                 $poFilePath = $file->storeAs('purchase_orders', $filename, 'public');
             }
 
-            $totalAmount = 0;
-            foreach ($request->input('items') as $item) {
-                $quantity = floatval($item['quantity']);
-                $unitPrice = floatval($item['unit_price']);
-                $discountPercent = floatval($item['discount_percent'] ?? 0);
-                
-                $subtotal = $quantity * $unitPrice;
-                $discountAmount = $subtotal * ($discountPercent / 100);
-                $total = $subtotal - $discountAmount;
-                $totalAmount += $total;
-            }
+            $totalAmount = $this->calculateTotalAmount($request->input('items'));
 
             $po = PurchaseOrder::create([
-                'company_id' => $request->company_id,
-                'customer_id' => $request->customer_id,
-                'quotation_id' => $request->quotation_id,
+                'company_id'       => $companyId,  // ✅ Dari session
+                'customer_id'      => $request->customer_id,
+                'quotation_id'     => $request->quotation_id,
                 'activity_type_id' => $request->activity_type_id,
-                'po_number' => $request->po_number,
-                'po_date' => $request->po_date,
-                'valid_until' => $request->valid_until,
-                'po_file_path' => $poFilePath,
-                'status' => $request->status ?? 'draft',
-                'notes' => $request->notes,
-                'total_amount' => $totalAmount,
-                'created_by' => Auth::id(),
+                'po_number'        => $request->po_number,
+                'po_date'          => $request->po_date,
+                'valid_until'      => $request->valid_until,
+                'po_file_path'     => $poFilePath,
+                'status'           => $request->status ?? 'draft',
+                'notes'            => $request->notes,
+                'total_amount'     => $totalAmount,
+                'work_package'     => $request->work_package,
+                'activity_name'    => $request->activity_name,
+                'created_by'       => Auth::id(),
             ]);
 
             foreach ($request->input('items') as $item) {
-                $discountPercent = $item['discount_percent'] ?? 0;
-                
+                $productId = $this->resolveProductId($item);
+
                 PurchaseOrderItem::create([
-                    'po_id' => $po->po_id,
-                    'product_id' => $item['product_id'] ?? null,
-                    'product_name' => $item['product_name'],
-                    'specification' => $item['specification'] ?? null,
-                    'quantity' => $item['quantity'],
-                    'unit' => $item['unit'],
-                    'unit_price' => $item['unit_price'],
-                    'discount_percent' => $discountPercent,
-                    'notes' => $item['notes'] ?? null,
+                    'po_id'            => $po->po_id,
+                    'product_id'       => $productId,
+                    'product_name'     => $item['product_name'],
+                    'specification'    => $item['specification'] ?? null,
+                    'quantity'         => $item['quantity'],
+                    'unit'             => $item['unit'] ?? 'pcs',
+                    'unit_price'       => $item['unit_price'],
+                    'discount_percent' => $item['discount_percent'] ?? 0,
+                    'notes'            => $item['notes'] ?? null,
                 ]);
             }
 
@@ -221,231 +214,64 @@ class PurchaseOrderController extends Controller
 
             $po->load(['company', 'customer', 'activityType', 'createdByUser', 'items']);
 
-            // ✅ Return with stock validation info
             return response()->json([
-                'success' => true,
-                'message' => 'Purchase order created successfully',
-                'data' => $po,
-                'stock_validation' => $stockValidation, // ✅ Include stock info
+                'success'          => true,
+                'message'          => 'Purchase order created successfully',
+                'data'             => $po,
+                'stock_validation' => $stockValidation,
             ], 201);
-
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to create purchase order',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    /**
-     * ✅ NEW: Validate stock for items (helper method)
-     */
-private function validateStockForItems($items, $companyId)
-{
-    if (empty($items)) {
-        return ['is_valid' => true, 'total_items' => 0, 'insufficient_items' => 0, 'issues' => []];
-    }
-
-    $productItems = collect($items)->filter(fn($i) => !empty($i['product_id']));
-
-    if ($productItems->isEmpty()) {
-        return [
-            'is_valid'          => true,
-            'total_items'       => count($items),
-            'insufficient_items'=> 0,
-            'issues'            => [],
-            'note'              => 'Semua item adalah item custom (tanpa product)',
-        ];
-    }
-
-    // ✅ Satu query real-time untuk semua produk
-    $stock = StockHelper::getAvailableByProducts(
-        $productItems->pluck('product_id')->unique(),
-        $companyId
-    );
-
-    $issues       = [];
-    $allSufficient = true;
-
-    foreach ($items as $item) {
-        if (empty($item['product_id'])) continue;
-
-        $available = (float)($stock[$item['product_id']] ?? 0);
-        $required  = (float)$item['quantity'];
-
-        if ($available < $required) {
-            $allSufficient = false;
-            $issues[] = [
-                'product_id'     => $item['product_id'],
-                'product_name'   => $item['product_name'],
-                'required'       => $required,
-                'available'      => $available,
-                'shortage'       => $required - $available,
-                'status'         => $available > 0 ? 'low' : 'out_of_stock',
-                'recommendation' => 'Buat PO Supplier untuk menambah stok',
-            ];
-        }
-    }
-
-    return [
-        'is_valid'          => $allSufficient,
-        'total_items'       => count($items),
-        'insufficient_items'=> count($issues),
-        'issues'            => $issues,
-        'warning'           => !$allSufficient
-            ? 'Beberapa produk stok tidak mencukupi.'
-            : null,
-    ];
-}
-
-    /**
-     * ✅ NEW: Endpoint untuk check stock sebelum create/update PO
-     */
-    public function checkStock(Request $request)
+    /* ================================================================
+     * SHOW
+     * ================================================================ */
+    public function show(Request $request, $id)
     {
-        $validator = Validator::make($request->all(), [
-            'company_id' => 'required|exists:companies,company_id',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'nullable|exists:products,product_id',
-            'items.*.product_name' => 'required|string',
-            'items.*.quantity' => 'required|numeric|min:0',
-        ]);
+        $companyId = $this->getCompanyId($request);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation failed',
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        $validation = $this->validateStockForItems($request->items, $request->company_id);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Stock validation completed',
-            'data' => $validation,
-        ], 200);
-    }
-
-    /**
-     * ✅ UPDATED: Validate stock BEFORE approving PO
-     */
-    public function updateStatus(Request $request, $id)
-    {
-        $po = PurchaseOrder::with(['quotation.activityType', 'activityType', 'company', 'customer', 'items'])->find($id);
-
-        if (!$po) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Purchase order not found'
-            ], 404);
-        }
-
-        $validator = Validator::make($request->all(), [
-            'status' => 'required|in:draft,issued,sent,approved,processing,completed,cancelled',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation error',
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        $oldStatus = $po->status;
-        $newStatus = $request->status;
-
-        // ✅ CRITICAL: Validate stock BEFORE approval
-        if ($newStatus === 'approved' && $oldStatus !== 'approved') {
-            $validation = $po->validateStockAvailability();
-            
-            if (!$validation['is_valid']) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'PO tidak dapat disetujui karena stok tidak mencukupi',
-                    'stock_validation' => $validation,
-                    'recommendation' => 'Silakan buat PO Supplier terlebih dahulu untuk menambah stok',
-                ], 422);
-            }
-        }
-
-        DB::beginTransaction();
-        try {
-            $po->update(['status' => $newStatus]);
-
-            // Auto-create tender project & delivery note saat approved
-            if ($newStatus === 'approved' && $oldStatus !== 'approved') {
-                $this->handlePOApproval($po);
-            }
-
-            DB::commit();
-
-            $po->load([
-                'activityType',
-                'tenderProject',
-                'bankGuarantees',
-                'tenderDocuments',
-                'deliveryNotes'
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Purchase order status updated successfully',
-                'data' => $po
-            ], 200);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to update status',
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
-    /**
-     * ✅ UPDATED: Added tender relationships to eager loading
-     */
-    public function show($id)
-    {
         $po = PurchaseOrder::with([
-            'company', 
-            'customer', 
-            'quotation.activityType',
+            'company',
+            'customer',
             'activityType',
-            'quotation.items', 
-            'items', 
-            'invoices',
-            'deliveryNotes',
+            'quotation.activityType',
+            'items', // kalau ini perlu untuk detail
             'createdByUser',
             'issuedByUser',
-            // ✅ Tender relationships
-            'tenderProject',
-            'bankGuarantees',
-            'tenderDocuments'
-        ])->find($id);
+        ])
+            ->where('company_id', $companyId)
+            ->find($id);
 
         if (!$po) {
             return response()->json([
                 'success' => false,
-                'message' => 'Purchase order not found'
+                'message' => 'Purchase order not found',
             ], 404);
         }
 
         return response()->json([
             'success' => true,
             'message' => 'Purchase order retrieved successfully',
-            'data' => $po
+            'data'    => $po,
         ], 200);
     }
 
+
+    /* ================================================================
+     * UPDATE
+     * ================================================================ */
     public function update(Request $request, $id)
     {
-        $po = PurchaseOrder::find($id);
+        $companyId = $this->getCompanyId($request);
+
+        $po = PurchaseOrder::where('company_id', $companyId)->find($id);
 
         if (!$po) {
             return response()->json(['success' => false, 'message' => 'Purchase order not found'], 404);
@@ -456,37 +282,42 @@ private function validateStockForItems($items, $companyId)
         }
 
         if ($request->has('items') && is_string($request->items)) {
-            $request->merge([
-                'items' => json_decode($request->items, true)
-            ]);
+            $request->merge(['items' => json_decode($request->items, true)]);
         }
 
         $validator = Validator::make($request->all(), [
-            'company_id' => 'required|exists:companies,company_id',
-            'customer_id' => 'required|exists:customers,customer_id',
-            'quotation_id' => 'nullable|exists:quotations,quotation_id',
-            'activity_type_id' => 'nullable|exists:activity_types,activity_type_id',
-            'po_number' => 'required|string|max:100|unique:purchase_orders,po_number,' . $id . ',po_id',
-            'po_date' => 'required|date',
-            'valid_until' => 'required|string|max:200',
-            'po_file' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
-            'notes' => 'nullable|string',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'nullable|exists:products,product_id',
-            'items.*.product_name' => 'required|string|max:255',
-            'items.*.specification' => 'nullable|string',
-            'items.*.quantity' => 'required|numeric|min:0',
-            'items.*.unit' => 'required|string|max:50',
-            'items.*.unit_price' => 'required|numeric|min:0',
+            'customer_id'              => 'required|exists:customers,customer_id',
+            'quotation_id'             => 'nullable|exists:quotations,quotation_id',
+            'activity_type_id'         => 'nullable|exists:activity_types,activity_type_id',
+            'po_number'                => 'required|string|max:100|unique:purchase_orders,po_number,' . $id . ',po_id',
+            'po_date'                  => 'required|date',
+            'valid_until'              => 'required|string|max:200',
+            'po_file'                  => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
+            'notes'                    => 'nullable|string',
+            'items'                    => 'required|array|min:1',
+            'items.*.product_id'       => 'nullable|exists:products,product_id',
+            'items.*.product_name'     => 'required|string|max:255',
+            'items.*.specification'    => 'nullable|string',
+            'items.*.quantity'         => 'required|numeric|min:0',
+            'items.*.unit'             => 'required|string|max:50',
+            'items.*.unit_price'       => 'required|numeric|min:0',
             'items.*.discount_percent' => 'nullable|numeric|min:0|max:100',
-            'items.*.notes' => 'nullable|string',
+            'items.*.notes'            => 'nullable|string',
+            'work_package'          => 'nullable|string|max:255',
+            'activity_name'         => 'nullable|string|max:255',
+            'items.*.brand'         => 'nullable|string|max:100',
+            'items.*.product_code' => 'nullable|string|max:100',
+            'items.*.category'     => 'nullable|string|max:100',
+            'items.*.unit'         => 'nullable|string|max:50',
+
+
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
@@ -496,50 +327,42 @@ private function validateStockForItems($items, $companyId)
                 if ($po->po_file_path && Storage::disk('public')->exists($po->po_file_path)) {
                     Storage::disk('public')->delete($po->po_file_path);
                 }
-                $file = $request->file('po_file');
-                $filename = 'PO_' . time() . '_' . $file->getClientOriginalName();
+                $file         = $request->file('po_file');
+                $filename     = 'PO_' . time() . '_' . $file->getClientOriginalName();
                 $po->po_file_path = $file->storeAs('purchase_orders', $filename, 'public');
             }
 
-            $totalAmount = 0;
-            foreach ($request->input('items') as $item) {
-                $quantity = floatval($item['quantity']);
-                $unitPrice = floatval($item['unit_price']);
-                $discountPercent = floatval($item['discount_percent'] ?? 0);
-                
-                $subtotal = $quantity * $unitPrice;
-                $discountAmount = $subtotal * ($discountPercent / 100);
-                $total = $subtotal - $discountAmount;
-                $totalAmount += $total;
-            }
+            $totalAmount = $this->calculateTotalAmount($request->input('items'));
 
             $po->update([
-                'company_id' => $request->company_id,
-                'customer_id' => $request->customer_id,
-                'quotation_id' => $request->quotation_id,
+                'customer_id'      => $request->customer_id,
+                'quotation_id'     => $request->quotation_id,
                 'activity_type_id' => $request->activity_type_id,
-                'po_number' => $request->po_number,
-                'po_date' => $request->po_date,
-                'valid_until' => $request->valid_until,
-                'notes' => $request->notes,
-                'total_amount' => $totalAmount,
+                'po_number'        => $request->po_number,
+                'po_date'          => $request->po_date,
+                'valid_until'      => $request->valid_until,
+                'notes'            => $request->notes,
+                'total_amount'     => $totalAmount,
+                'work_package'     => $request->work_package,  // ← pindah ke sini (sebelumnya salah di dalam loop)
+                'activity_name'    => $request->activity_name, // ← pindah ke sini
             ]);
 
             PurchaseOrderItem::where('po_id', $po->po_id)->delete();
 
             foreach ($request->input('items') as $item) {
-                $discountPercent = $item['discount_percent'] ?? 0;
-                
+                $productId = $this->resolveProductId($item); // ← auto-create jika manual
+
                 PurchaseOrderItem::create([
-                    'po_id' => $po->po_id,
-                    'product_id' => $item['product_id'] ?? null,
-                    'product_name' => $item['product_name'],
-                    'specification' => $item['specification'] ?? null,
-                    'quantity' => $item['quantity'],
-                    'unit' => $item['unit'],
-                    'unit_price' => $item['unit_price'],
-                    'discount_percent' => $discountPercent,
-                    'notes' => $item['notes'] ?? null,
+                    'po_id'            => $po->po_id,
+                    'product_id'       => $productId,         // ← selalu ada
+                    'product_name'     => $item['product_name'],
+                    'specification'    => $item['specification'] ?? null,
+                    'quantity'         => $item['quantity'],
+                    'unit'             => $item['unit'] ?? 'pcs',
+                    'unit_price'       => $item['unit_price'],
+                    'discount_percent' => $item['discount_percent'] ?? 0,
+                    'notes'            => $item['notes'] ?? null,
+                    // ← work_package & activity_name DIHAPUS dari sini, bukan kolom di items
                 ]);
             }
 
@@ -550,98 +373,168 @@ private function validateStockForItems($items, $companyId)
             return response()->json([
                 'success' => true,
                 'message' => 'Purchase order updated successfully',
-                'data' => $po
+                'data'    => $po,
             ], 200);
-
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update purchase order',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    public function destroy($id)
+    /* ================================================================
+     * DESTROY
+     * ================================================================ */
+    public function destroy(Request $request, $id)
     {
-        $po = PurchaseOrder::find($id);
+        $companyId = $this->getCompanyId($request);
+        $po        = PurchaseOrder::where('company_id', $companyId)->find($id);
 
         if (!$po) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Purchase order not found'
-            ], 404);
+            return response()->json(['success' => false, 'message' => 'Purchase order not found'], 404);
         }
 
         if ($po->status !== 'draft') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Only draft purchase orders can be deleted'
-            ], 422);
+            return response()->json(['success' => false, 'message' => 'Only draft purchase orders can be deleted'], 422);
         }
 
         if ($po->invoices()->exists()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Cannot delete purchase order with existing invoices'
-            ], 409);
+            return response()->json(['success' => false, 'message' => 'Cannot delete purchase order with existing invoices'], 409);
         }
 
         if ($po->tenderDocuments()->exists()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Cannot delete purchase order with uploaded tender documents'
-            ], 409);
+            return response()->json(['success' => false, 'message' => 'Cannot delete purchase order with uploaded tender documents'], 409);
         }
 
         if ($po->bankGuarantees()->where('status', 'active')->exists()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Cannot delete purchase order with active bank guarantees'
-            ], 409);
+            return response()->json(['success' => false, 'message' => 'Cannot delete purchase order with active bank guarantees'], 409);
         }
 
         try {
             $po->delete();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Purchase order deleted successfully'
-            ], 200);
-
+            return response()->json(['success' => true, 'message' => 'Purchase order deleted successfully'], 200);
         } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to delete purchase order',
-                'error' => $e->getMessage()
-            ], 500);
+            return response()->json(['success' => false, 'message' => 'Failed to delete purchase order', 'error' => $e->getMessage()], 500);
         }
     }
 
+    /* ================================================================
+     * UPDATE STATUS
+     * ================================================================ */
+  public function updateStatus(Request $request, $id)
+{
+    $companyId = $this->getCompanyId($request);
+
+    $po = PurchaseOrder::with([
+        'quotation.activityType',
+        'activityType',
+        'company',
+        'customer',
+        'items',
+    ])
+        ->where('company_id', $companyId)
+        ->find($id);
+
+    if (!$po) {
+        return response()->json(['success' => false, 'message' => 'Purchase order not found'], 404);
+    }
+
+    $validator = Validator::make($request->all(), [
+        'status' => 'required|in:draft,issued,sent,approved,processing,completed,cancelled',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Validation error',
+            'errors'  => $validator->errors(),
+        ], 422);
+    }
+
+    $oldStatus      = $po->status;
+    $newStatus      = $request->status;
+    $createProforma = $request->boolean('create_proforma', true); // ✅ tangkap sekali di sini
+    $forceApprove   = $request->boolean('force_approve', false);
+
+    // ✅ Validate stock saat approve (sebelum transaction)
+    if ($newStatus === 'approved' && $oldStatus !== 'approved') {
+        if (!$forceApprove) {
+            $validation = $po->validateStockAvailability();
+
+            if (!$validation['is_valid']) {
+                return response()->json([
+                    'success'          => false,
+                    'error_code'       => 'INSUFFICIENT_STOCK',
+                    'message'          => 'Stok tidak mencukupi untuk approve PO ini',
+                    'stock_validation' => $validation,
+                ], 422);
+            }
+        }
+    }
+
+    DB::beginTransaction();
+    try {
+        $po->update(['status' => $newStatus]);
+
+        // ✅ Panggil handlePOApproval SEKALI saja, dengan param yang benar
+        if ($newStatus === 'approved' && $oldStatus !== 'approved') {
+            $this->handlePOApproval($po, $createProforma);
+        }
+
+        DB::commit();
+
+        $po->load([
+            'activityType',
+            'tenderProject',
+            'bankGuarantees',
+            'tenderDocuments',
+            'deliveryNotes',
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Purchase order status updated successfully',
+            'data'    => $po,
+        ], 200);
+    } catch (\Exception $e) {
+        DB::rollBack();
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to update status',
+            'error'   => $e->getMessage(),
+        ], 500);
+    }
+}
+    /* ================================================================
+     * ISSUE
+     * ================================================================ */
     public function issue(Request $request, $id)
     {
-        $po = PurchaseOrder::with(['company', 'customer', 'items'])->find($id);
+        $companyId = $this->getCompanyId($request);
+
+        $po = PurchaseOrder::with(['company', 'customer', 'items'])
+            ->where('company_id', $companyId)
+            ->find($id);
 
         if (!$po) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Purchase order not found' 
-            ], 404);
+            return response()->json(['success' => false, 'message' => 'Purchase order not found'], 404);
         }
 
         if (!in_array($po->status, ['draft', 'sent'])) {
             return response()->json([
-                'success' => false,
-                'message' => 'Only draft or sent purchase orders can be issued',
-                'current_status' => $po->status
+                'success'        => false,
+                'message'        => 'Only draft or sent purchase orders can be issued',
+                'current_status' => $po->status,
             ], 422);
         }
 
         $validator = Validator::make($request->all(), [
-            'signed_name' => 'required|string|max:100',
+            'signed_name'     => 'required|string|max:100',
             'signed_position' => 'required|string|max:100',
-            'signed_city' => 'required|string|max:50',
+            'signed_city'     => 'required|string|max:50',
             'signature_image' => 'required|image|mimes:png,jpg,jpeg|max:2048',
         ]);
 
@@ -649,7 +542,7 @@ private function validateStockForItems($items, $companyId)
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
@@ -665,152 +558,83 @@ private function validateStockForItems($items, $companyId)
             return response()->json([
                 'success' => true,
                 'message' => 'Purchase order issued successfully',
-                'data' => $po->load(['issuedByUser', 'company', 'customer', 'items'])
+                'data'    => $po->load(['issuedByUser', 'company', 'customer', 'items']),
             ], 200);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to issue purchase order',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-  
-
-    /**
-     * ✅ NEW: Handle PO approval logic
-     * Auto-create tender project for TENDER type
-     * Auto-create delivery note for ALL types
-     */
-    private function handlePOApproval(PurchaseOrder $po)
+    /* ================================================================
+     * CHECK STOCK
+     * ================================================================ */
+    public function checkStock(Request $request)
     {
-        // ✅ Check if this is tender type
-        $isTender = $po->is_tender; // Use accessor
+        // ✅ company_id dari session — tidak wajib dari request
+        $companyId = $this->getCompanyId($request);
 
-        // ✅ For TENDER: Create tender project
-        if ($isTender) {
-            $this->createTenderProject($po);
-        }
-
-        // ✅ For ALL: Create delivery note
-        $this->createDeliveryNote($po);
-    }
-
-    /**
-     * ✅ NEW: Create tender project
-     */
-    private function createTenderProject(PurchaseOrder $po)
-    {
-        // Check if already exists
-        $existing = TenderProjectDetail::where('po_id', $po->po_id)->first();
-        
-        if ($existing) {
-            return; // Already created
-        }
-
-        $contractEndDate = $po->valid_until;
-
-        // Fallback: If null, use start_date + 30 days
-        if (!$contractEndDate) {
-            $contractEndDate = \Carbon\Carbon::parse($po->po_date)->addDays(30);
-        }
-
-        // Create tender project
-        TenderProjectDetail::create([
-            'po_id' => $po->po_id,
-            'contract_number' => $po->po_number,
-            'contract_start_date' => $po->po_date,
-            'contract_end_date' => $contractEndDate,
-            'has_ba_uji_fungsi' => false,
-            'ba_uji_fungsi_date' => null,
-            'has_bahp' => false,
-            'bahp_date' => null,
-            'has_bast' => false,
-            'bast_date' => null,
-            'has_sp2d' => false,
-            'sp2d_date' => null,
-            'project_status' => 'ongoing',
-            'notes' => 'Auto-created from PO approval',
-            'created_by' => Auth::id(),
-        ]);
-    }
-
-    /**
-     * ✅ NEW: Create delivery note
-     */
-    private function createDeliveryNote(PurchaseOrder $po)
-    {
-        // Check if already exists
-        $existing = DeliveryNote::where('po_id', $po->po_id)->first();
-        
-        if ($existing) {
-            return; // Already created
-        }
-
-        // Generate delivery note number
-        $companyCode = $po->company ? $po->company->company_code : 'XXX';
-        $year = date('Y');
-        $sequence = DeliveryNote::whereYear('created_at', $year)->count() + 1;
-        $dnNumber = "DN/{$companyCode}/{$year}/" . str_pad($sequence, 4, '0', STR_PAD_LEFT);
-
-        // Create delivery note
-        $deliveryNote = DeliveryNote::create([
-            'company_id' => $po->company_id,
-            'po_id' => $po->po_id,
-            'delivery_note_number' => $dnNumber,
-            'delivery_date' => now(),
-            'recipient_name' => $po->customer ? $po->customer->customer_name : null,
-            'recipient_address' => $po->customer ? $po->customer->address : null,
-            'recipient_phone' => $po->customer ? $po->customer->phone : null,
-            'delivery_status' => 'pending',
-            'notes' => 'Auto-created from PO approval',
-            'created_by' => Auth::id(),
+        $validator = Validator::make($request->all(), [
+            'items'                    => 'required|array|min:1',
+            'items.*.product_id'       => 'nullable|exists:products,product_id',
+            'items.*.product_name'     => 'required|string',
+            'items.*.quantity'         => 'required|numeric|min:0',
         ]);
 
-        // Create delivery note items from PO items
-        foreach ($po->items as $poItem) {
-            DeliveryNoteItem::create([
-                'delivery_note_id' => $deliveryNote->delivery_note_id,
-                'product_id' => $poItem->product_id,
-                'product_name' => $poItem->product_name,
-                'specification' => $poItem->specification,
-                'quantity' => $poItem->quantity,
-                'unit' => $poItem->unit,
-            ]);
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors'  => $validator->errors(),
+            ], 422);
         }
+
+        $validation = $this->validateStockForItems($request->items, $companyId);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Stock validation completed',
+            'data'    => $validation,
+        ], 200);
     }
 
-    public function generatePdf($id)
+    /* ================================================================
+     * GENERATE & DOWNLOAD PDF
+     * ================================================================ */
+    public function generatePdf(Request $request, $id)
     {
+        $companyId = $this->getCompanyId($request);
+
         $po = PurchaseOrder::with([
-            'company', 
+            'company',
             'customer',
             'quotation.activityType',
             'items',
             'issuedByUser',
             'tenderProject',
-            'bankGuarantees'
-        ])->find($id);
+            'bankGuarantees',
+        ])
+            ->where('company_id', $companyId)
+            ->find($id);
 
         if (!$po) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Purchase order not found'
-            ], 404);
+            return response()->json(['success' => false, 'message' => 'Purchase order not found'], 404);
         }
 
         if ($po->status === 'draft') {
             return response()->json([
                 'success' => false,
-                'message' => 'Cannot generate PDF for draft purchase order. Please issue the purchase order first.'
+                'message' => 'Cannot generate PDF for draft purchase order. Please issue the purchase order first.',
             ], 422);
         }
 
         try {
-            $pdfPath = $this->pdfService->generatePurchaseOrderPdf($po);
+            $pdfPath      = $this->pdfService->generatePurchaseOrderPdf($po);
             $absolutePath = Storage::disk('local')->path($pdfPath);
-            
+
             if (!file_exists($absolutePath)) {
                 throw new \Exception("PDF file not found at: {$absolutePath}");
             }
@@ -821,32 +645,32 @@ private function validateStockForItems($items, $companyId)
                 $absolutePath,
                 'PO_' . $filename . '.pdf'
             )->deleteFileAfterSend(true);
-
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to generate PDF',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
+    /* ================================================================
+     * UPLOAD / DOWNLOAD PO CUSTOMER FILE
+     * ================================================================ */
     public function uploadPoCustomerFile(Request $request, $id)
     {
-        $po = PurchaseOrder::find($id);
+        $companyId = $this->getCompanyId($request);
+        $po        = PurchaseOrder::where('company_id', $companyId)->find($id);
 
         if (!$po) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Purchase order not found'
-            ], 404);
+            return response()->json(['success' => false, 'message' => 'Purchase order not found'], 404);
         }
 
         if ($po->status !== 'approved') {
             return response()->json([
-                'success' => false,
-                'message' => 'Only approved purchase orders can upload customer PO file',
-                'current_status' => $po->status
+                'success'        => false,
+                'message'        => 'Only approved purchase orders can upload customer PO file',
+                'current_status' => $po->status,
             ], 422);
         }
 
@@ -858,53 +682,326 @@ private function validateStockForItems($items, $companyId)
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
         try {
             $po->uploadPoCustomerFile($request->file('po_customer_file'));
-
-            return response()->json([
-                'success' => true,
-                'message' => 'PO customer file uploaded successfully',
-                'data' => $po
-            ], 200);
+            return response()->json(['success' => true, 'message' => 'PO customer file uploaded successfully', 'data' => $po], 200);
         } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to upload PO customer file',
-                'error' => $e->getMessage()
-            ], 500);
+            return response()->json(['success' => false, 'message' => 'Failed to upload PO customer file', 'error' => $e->getMessage()], 500);
         }
     }
 
-    public function downloadPoCustomerFile($id)
+    public function downloadPoCustomerFile(Request $request, $id)
     {
-        $po = PurchaseOrder::find($id);
+        $companyId = $this->getCompanyId($request);
+        $po        = PurchaseOrder::where('company_id', $companyId)->find($id);
 
         if (!$po) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Purchase order not found'
-            ], 404);
+            return response()->json(['success' => false, 'message' => 'Purchase order not found'], 404);
         }
 
         if (!$po->has_po_customer_file) {
-            return response()->json([
-                'success' => false,
-                'message' => 'PO customer file not found'
-            ], 404);
+            return response()->json(['success' => false, 'message' => 'PO customer file not found'], 404);
         }
 
         return Storage::download($po->po_customer_file_path);
     }
 
-    private function sanitizeFilename($filename)
+    /* ================================================================
+     * PRIVATE HELPERS
+     * ================================================================ */
+
+    /**
+     * Hitung total amount dari array items
+     */
+    private function calculateTotalAmount(array $items): float
+    {
+        return collect($items)->sum(function ($item) {
+            $subtotal        = floatval($item['quantity']) * floatval($item['unit_price']);
+            $discountAmount  = $subtotal * (floatval($item['discount_percent'] ?? 0) / 100);
+            return $subtotal - $discountAmount;
+        });
+    }
+
+    private function validateStockForItems($items, $companyId): array
+    {
+        if (empty($items)) {
+            return ['is_valid' => true, 'total_items' => 0, 'insufficient_items' => 0, 'issues' => []];
+        }
+
+        $productItems = collect($items)->filter(fn($i) => !empty($i['product_id']));
+
+        if ($productItems->isEmpty()) {
+            return [
+                'is_valid'           => true,
+                'total_items'        => count($items),
+                'insufficient_items' => 0,
+                'issues'             => [],
+                'note'               => 'Semua item adalah item custom (tanpa product)',
+            ];
+        }
+
+        $stock        = StockHelper::getAvailableByProducts(
+            $productItems->pluck('product_id')->unique(),
+            $companyId
+        );
+        $issues       = [];
+        $allSufficient = true;
+
+        foreach ($items as $item) {
+            if (empty($item['product_id'])) continue;
+
+            $available = (float) $stock->get($item['product_id'], 0);
+            $required  = (float) $item['quantity'];
+
+            if ($available < $required) {
+                $allSufficient = false;
+                $issues[] = [
+                    'product_id'     => $item['product_id'],
+                    'product_name'   => $item['product_name'],
+                    'required'       => $required,
+                    'available'      => $available,
+                    'shortage'       => $required - $available,
+                    'status'         => $available > 0 ? 'low' : 'out_of_stock',
+                    'recommendation' => 'Buat PO Supplier untuk menambah stok',
+                ];
+            }
+        }
+
+        return [
+            'is_valid'           => $allSufficient,
+            'total_items'        => count($items),
+            'insufficient_items' => count($issues),
+            'issues'             => $issues,
+            'warning'            => !$allSufficient ? 'Beberapa produk stok tidak mencukupi.' : null,
+        ];
+    }
+
+    private function handlePOApproval(PurchaseOrder $po, bool $createProforma = true): void
+    {
+        if ($po->is_tender) {
+            $this->createTenderProject($po);
+        }
+        $this->createDeliveryNote($po);
+
+        // ✅ Hanya buat PI kalau admin pilih yes
+        if ($createProforma) {
+            $this->autoGenerateProformaInvoice($po);
+        }
+    }
+
+    private function autoGenerateProformaInvoice(PurchaseOrder $po): void
+    {
+        $sudahAdaPI = ProformaInvoice::where('po_id', $po->po_id)
+            ->whereNotIn('status', ['cancelled', 'rejected'])
+            ->exists();
+
+        if ($sudahAdaPI) {
+            return;
+        }
+
+        // ✅ Skip jika PO tidak punya items
+        if ($po->items->isEmpty()) {
+            return;
+        }
+
+        try {
+            // Hitung amount dari PO items
+            $subtotal = $po->items->sum(function ($item) {
+                $gross    = (float) $item->quantity * (float) $item->unit_price;
+                $discount = $gross * ((float) ($item->discount_percent ?? 0) / 100);
+                return $gross - $discount;
+            });
+
+            $taxPercentage  = 11; // default PPN Indonesia
+            $taxAmount      = $subtotal * ($taxPercentage / 100);
+            $totalAmount    = $subtotal + $taxAmount;
+
+            // Generate nomor PI
+            $companyCode = $po->company?->company_code ?? 'XXX';
+            $year        = date('Y');
+            $month       = date('m');
+
+            $last = ProformaInvoice::where('company_id', $po->company_id)
+                ->whereYear('proforma_date', $year)
+                ->whereMonth('proforma_date', $month)
+                ->orderByDesc('proforma_id')
+                ->lockForUpdate()
+                ->first();
+
+            $num           = $last ? ((int) substr($last->proforma_number, -5) + 1) : 1;
+            $proformaNumber = "PI/{$companyCode}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
+
+            // Buat PI
+            $pi = ProformaInvoice::create([
+                'company_id'      => $po->company_id,
+                'customer_id'     => $po->customer_id,
+                'po_id'           => $po->po_id,
+                'proforma_number' => $proformaNumber,
+                'proforma_date'   => now()->format('Y-m-d'),
+                'valid_until'     => now()->addDays(30)->format('Y-m-d'),
+                'subtotal'        => $subtotal,
+                'tax_percentage'  => $taxPercentage,
+                'tax_amount'      => $taxAmount,
+                'discount_amount' => 0,
+                'total_amount'    => $totalAmount,
+                'payment_terms'   => 'Net 30 hari',
+                'delivery_terms'  => 'FOB Destination',
+                'status'          => 'draft', // ✅ Draft dulu, admin bisa review/cancel
+                'notes'           => "Auto-generated dari PO {$po->po_number}",
+                'created_by'      => Auth::id(),
+            ]);
+
+            // Buat PI items dari PO items
+            foreach ($po->items as $poItem) {
+                ProformaInvoiceItem::create([
+                    'proforma_id'          => $pi->proforma_id,
+                    'product_id'           => $poItem->product_id,
+                    'product_name'         => $poItem->product_name,
+                    'product_description'  => $poItem->specification,
+                    'quantity'             => $poItem->quantity,
+                    'unit'                 => $poItem->unit,
+                    'unit_price'           => $poItem->unit_price,
+                    'notes'                => $poItem->notes,
+                ]);
+            }
+
+            \Illuminate\Support\Facades\Log::info(
+                "Auto-generated PI {$pi->proforma_number} dari PO {$po->po_number}"
+            );
+        } catch (\Exception $e) {
+            // ✅ Jangan gagalkan approval PO kalau PI gagal dibuat
+            // Log saja, proses tetap lanjut
+            \Illuminate\Support\Facades\Log::error(
+                "Gagal auto-generate PI untuk PO {$po->po_number}: " . $e->getMessage()
+            );
+        }
+    }
+
+    private function createTenderProject(PurchaseOrder $po): void
+    {
+        if (TenderProjectDetail::where('po_id', $po->po_id)->exists()) return;
+
+        $contractEndDate = $po->valid_until
+            ?? \Carbon\Carbon::parse($po->po_date)->addDays(30);
+
+        TenderProjectDetail::create([
+            'po_id'               => $po->po_id,
+            'contract_number'     => $po->po_number,
+            'contract_start_date' => $po->po_date,
+            'contract_end_date'   => $contractEndDate,
+            'has_ba_uji_fungsi'   => false,
+            'ba_uji_fungsi_date'  => null,
+            'has_bahp'            => false,
+            'bahp_date'           => null,
+            'has_bast'            => false,
+            'bast_date'           => null,
+            'has_sp2d'            => false,
+            'sp2d_date'           => null,
+            'project_status'      => 'ongoing',
+            'notes'               => 'Auto-created from PO approval',
+            'created_by'          => Auth::id(),
+        ]);
+    }
+
+    private function createDeliveryNote(PurchaseOrder $po): void
+    {
+        if (DeliveryNote::where('po_id', $po->po_id)->exists()) return;
+
+        $companyCode = $po->company?->company_code ?? 'XXX';
+        $year        = date('Y');
+        $sequence    = DeliveryNote::whereYear('created_at', $year)->count() + 1;
+        $dnNumber    = "DN/{$companyCode}/{$year}/" . str_pad($sequence, 4, '0', STR_PAD_LEFT);
+
+        $deliveryNote = DeliveryNote::create([
+            'company_id'            => $po->company_id,
+            'po_id'                 => $po->po_id,
+            'delivery_note_number'  => $dnNumber,
+            'delivery_date'         => now(),
+            'recipient_name'        => $po->customer?->customer_name,
+            'recipient_address'     => $po->customer?->address,
+            'recipient_phone'       => $po->customer?->phone,
+            'delivery_status'       => 'pending',
+            'notes'                 => 'Auto-created from PO approval',
+            'created_by'            => Auth::id(),
+        ]);
+
+        foreach ($po->items as $poItem) {
+            DeliveryNoteItem::create([
+                'delivery_note_id' => $deliveryNote->delivery_note_id,
+                'product_id'       => $poItem->product_id,
+                'product_name'     => $poItem->product_name,
+                'specification'    => $poItem->specification,
+                'quantity'         => $poItem->quantity,
+                'unit'             => $poItem->unit,
+            ]);
+        }
+    }
+
+    public function generateNumber()
+    {
+        return DB::transaction(function () {
+
+            $year = date('Y');
+
+            $last = PurchaseOrder::whereYear('created_at', $year)
+                ->lockForUpdate()
+                ->orderBy('po_id', 'desc')
+                ->first();
+
+            $nextNumber = 1;
+
+            if ($last && $last->po_number) {
+                preg_match('/PO-\d{4}-(\d+)/', $last->po_number, $matches);
+
+                if (isset($matches[1])) {
+                    $nextNumber = intval($matches[1]) + 1;
+                }
+            }
+
+            $poNumber = 'PO-' . $year . '-' . str_pad($nextNumber, 3, '0', STR_PAD_LEFT);
+
+            return response()->json([
+                'success' => true,
+                'po_number' => $poNumber
+            ]);
+        });
+    }
+
+
+    private function sanitizeFilename(string $filename): string
     {
         $filename = str_replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], '-', $filename);
         $filename = preg_replace('/\s+/', '_', $filename);
-        $filename = preg_replace('/[^A-Za-z0-9\-_]/', '', $filename);
-        return $filename;
+        return preg_replace('/[^A-Za-z0-9\-_]/', '', $filename);
+    }
+
+    private function resolveProductId(array $item): ?int
+    {
+        if (!empty($item['product_id'])) {
+            return (int) $item['product_id'];
+        }
+
+        if (!empty($item['product_name'])) {
+            $product = Product::create([
+                'product_code'  => !empty($item['product_code'])
+                    ? $item['product_code']
+                    : 'MNL-' . strtoupper(uniqid()),
+                'product_name'  => $item['product_name'],
+                'brand'         => $item['brand'] ?? '-',
+                'category'      => $item['category'] ?? null,
+                'unit'          => $item['unit'] ?? 'pcs',
+                'selling_price' => $item['unit_price'] ?? 0,
+                'purchase_price' => 0,
+                'supplier_id'   => null,
+                'is_precursor'  => false,
+            ]);
+            return $product->product_id;
+        }
+
+        return null;
     }
 }

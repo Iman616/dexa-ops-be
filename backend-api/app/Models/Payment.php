@@ -331,4 +331,25 @@ class Payment extends Model
             'receipt_number' => $this->receipt ? $this->receipt->receipt_number : null,
         ];
     }
+
+    protected static function boot()
+{
+    parent::boot();
+
+    // ✅ Update invoice status setiap kali payment status berubah
+    static::updated(function ($payment) {
+        if ($payment->wasChanged('status') && $payment->invoice) {
+            $payment->invoice->updatePaymentStatus();
+        }
+    });
+
+    // ✅ Jika payment dihapus, recalculate invoice
+    static::deleted(function ($payment) {
+        $invoice = Invoice::find($payment->invoice_id);
+        if ($invoice) {
+            $invoice->updatePaymentStatus();
+        }
+    });
+}
+
 }

@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Storage;
 class SupplierDeliveryNote extends Model
 {
     use SoftDeletes;
-
     protected $table = 'supplier_delivery_notes';
     protected $primaryKey = 'supplier_delivery_note_id';
 

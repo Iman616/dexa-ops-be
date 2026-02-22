@@ -19,15 +19,22 @@ class QuotationItem extends Model
         'product_name',
         'quantity',
         'unit_price',
+           'item_status',   // ← tambah
+    'supplier_id',   // ← tambah
         'notes',
     ];
 
-    protected $casts = [
-        'quantity' => 'decimal:2',
-        'unit_price' => 'decimal:2',
-        'subtotal' => 'decimal:2', // boleh cast, tapi JANGAN di-set
-    ];
+protected $casts = [
+    'quantity'    => 'decimal:2',
+    'unit_price'  => 'decimal:2',
+    'subtotal'    => 'decimal:2',
+    'item_status' => 'string',
+];
 
+public function supplier()
+{
+    return $this->belongsTo(Supplier::class, 'supplier_id', 'supplier_id');
+}
     public function quotation()
     {
         return $this->belongsTo(Quotation::class, 'quotation_id', 'quotation_id');

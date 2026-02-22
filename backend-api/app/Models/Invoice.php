@@ -52,9 +52,27 @@ class Invoice extends Model
         'formatted_total',
         'formatted_remaining',
         'formatted_paid',
+          'tax_breakdown',
+    'is_overdue',
     ];
 
+    protected $attributes = [
+    'payment_status'  => 'unpaid',  // ✅ Default selalu unpaid
+    'discount_amount' => 0,
+    'currency'        => 'IDR',
+];
     /* ================= RELATIONSHIPS ================= */
+
+    public function taxInvoices()
+{
+    return $this->hasMany(TaxInvoice::class, 'invoice_id', 'invoice_id');
+}
+
+public function approvedTaxInvoices()
+{
+    return $this->hasMany(TaxInvoice::class, 'invoice_id', 'invoice_id')
+                ->where('status', 'approved');
+}
 
     public function company()
     {
@@ -135,6 +153,42 @@ class Invoice extends Model
                !in_array($this->payment_status, ['paid', 'completed']);
     }
 
+  public function getTaxBreakdownAttribute(): array
+{
+    $subtotal     = (float) $this->subtotal;
+    $taxRate      = (float) ($this->tax_percentage ?? 11);
+    $dppLainnya   = round($subtotal * (11 / 12), 0);
+    $ppnAmount    = round($dppLainnya * ($taxRate / 100), 0);
+    $totalWithTax = $subtotal + $ppnAmount;
+
+    $totalPaid = $this->payments
+        ->where('status', 'success')
+        ->sum('amount');
+
+    $taxDeductions = $this->taxInvoices
+        ->where('status', 'approved')
+        ->whereIn('tax_type', ['pph_21', 'pph_22', 'pph_23'])
+        ->sum('tax_amount');
+
+    // ✅ Rumus yang benar
+    $outstanding = max(0, $totalWithTax - $totalPaid);
+    $netReceived = max(0, $totalPaid - $taxDeductions);   // kas masuk - PPh potong
+    $overpayment = max(0, $totalPaid - $totalWithTax);
+
+    return [
+        'subtotal'       => $subtotal,
+        'dpp_lainnya'    => $dppLainnya,
+        'tax_rate'       => $taxRate,
+        'ppn_amount'     => $ppnAmount,
+        'total_with_tax' => $totalWithTax,
+        'total_paid'     => $totalPaid,
+        'tax_deductions' => $taxDeductions,
+        'outstanding'    => $outstanding,
+        'net_received'   => $netReceived,
+        'overpayment'    => $overpayment,
+    ];
+}
+
     public function getPaymentStatusLabelAttribute()
     {
         $labels = [
@@ -151,16 +205,26 @@ class Invoice extends Model
     /**
      * ✅ FIXED: Total yang sudah dibayar (hanya payment SUCCESS)
      */
-    public function getPaidAmountAttribute()
-    {
-        return $this->payments()->where('status', 'success')->sum('amount');
+  public function getPaidAmountAttribute()
+{
+    // ✅ Jika relasi sudah di-eager load, hitung dari collection (hindari N+1)
+    if ($this->relationLoaded('payments')) {
+        return $this->payments
+            ->where('status', 'success')
+            ->sum('amount');
     }
 
-    public function getRemainingAmountAttribute()
-    {
-        $remaining = $this->total_amount - $this->paid_amount;
-        return max(0, $remaining);
-    }
+    // ✅ Fallback: query langsung
+    return $this->payments()
+        ->where('status', 'success')
+        ->sum('amount');
+}
+
+public function getRemainingAmountAttribute()
+{
+    $remaining = (float) $this->total_amount - (float) $this->paid_amount;
+    return max(0, $remaining);
+}
 
     public function getDaysOverdueAttribute()
     {
@@ -238,22 +302,38 @@ class Invoice extends Model
     /**
      * ✅ FIXED: Update payment status berdasarkan total payment SUCCESS
      */
-    public function updatePaymentStatus()
-    {
-        // Hanya hitung payment SUCCESS
-        $totalPaid = $this->payments()->where('status', 'success')->sum('amount');
-        $remaining = $this->total_amount - $totalPaid;
-
-        if ($remaining <= 0.01) { // Toleransi pembulatan
-            $status = 'paid';
-        } elseif ($totalPaid > 0) {
-            $status = 'partial';
-        } else {
-            $status = 'unpaid';
-        }
-
-        $this->update(['payment_status' => $status]);
+public function updatePaymentStatus()
+{
+    if (!$this->invoice_id || (float) $this->total_amount <= 0) {
+        return;
     }
+
+    $totalPaid = $this->payments()
+        ->where('status', 'success')
+        ->sum('amount');
+
+    $remaining = (float) $this->total_amount - (float) $totalPaid;
+
+    if ($remaining <= 0.01) {
+        $status = 'paid';
+    } elseif ((float) $totalPaid > 0) {
+        $status = 'partial';
+    } else {
+        $status = 'unpaid';
+    }
+
+    // ✅ Pakai DB::table untuk hindari recursive event
+    \Illuminate\Support\Facades\DB::table('invoices')
+        ->where('invoice_id', $this->invoice_id)
+        ->update([
+            'payment_status' => $status,
+            'updated_at'     => now(),
+        ]);
+    
+    // ✅ Refresh attribute di memory juga
+    $this->payment_status = $status;
+}
+
 
     public function canCreateDeliveryNote()
     {
@@ -295,16 +375,14 @@ class Invoice extends Model
         ]);
     }
 
+    
+
     /* ================= BOOT ================= */
 
     protected static function boot()
     {
         parent::boot();
 
-        static::saved(function ($invoice) {
-            if ($invoice->wasChanged('total_amount')) {
-                $invoice->updatePaymentStatus();
-            }
-        });
+      
     }
 }

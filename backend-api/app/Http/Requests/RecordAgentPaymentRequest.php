@@ -15,13 +15,22 @@ class RecordAgentPaymentRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'pay_amount' => 'required|numeric|min:0.01',
-            'payment_date' => 'nullable|date',
-            'payment_method' => 'nullable|string|max:100',
-            'bank_name' => 'nullable|string|max:100',
-            'account_number' => 'nullable|string|max:50',
-            'transfer_date' => 'nullable|date',
-            'transfer_proof_file' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
+            'pay_amount'         => 'required|numeric|min:0.01',
+            'payment_date'       => 'nullable|date',
+            'payment_method'     => 'required|string|max:100',  // ✅ FIX: wajib diisi
+            'bank_name'          => 'nullable|string|max:100',
+            'account_number'     => 'nullable|string|max:50',
+            'transfer_date'      => 'nullable|date',
+            'transfer_proof_file'=> 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'pay_amount.required'     => 'Nominal pembayaran wajib diisi',
+            'pay_amount.min'          => 'Nominal pembayaran harus lebih besar dari 0',
+            'payment_method.required' => 'Metode pembayaran wajib diisi',
         ];
     }
 }

@@ -360,8 +360,9 @@
           <td class="text-center">{{ $item->product->unit ?? 'btl' }}</td>
           <td class="text-right">Rp {{ number_format($item->unit_price, 0, ',', '.') }}</td>
           <td class="text-right">Rp {{ number_format($itemSubtotal, 0, ',', '.') }}</td>
-          <td class="text-center">READY STOCK</td>
-        </tr>
+<td class="text-center">
+    {{ $item->item_status === 'ready' ? 'READY STOCK' : 'INDENT' }}
+</td>        </tr>
       @endforeach
 
       <!-- Summary Rows -->

@@ -1,9 +1,7 @@
 <?php
 
-
 namespace App\Http\Controllers\Api;
 
-use App\Http\Controllers\Controller;
 use App\Models\DeliveryNote;
 use App\Models\DeliveryNoteItem;
 use App\Models\PurchaseOrder;
@@ -17,8 +15,7 @@ use Illuminate\Support\Facades\Storage;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\Log;
 
-
-class DeliveryNoteController extends Controller
+class DeliveryNoteController extends BaseController  // ✅ extends BaseController
 {
     protected $deliveryNoteService;
 
@@ -33,6 +30,8 @@ class DeliveryNoteController extends Controller
      */
     public function index(Request $request)
     {
+        $companyId = $this->getCompanyId($request); // ✅
+
         $query = DeliveryNote::with([
             'company',
             'invoice.customer',
@@ -41,55 +40,34 @@ class DeliveryNoteController extends Controller
             'createdByUser',
             'issuedByUser',
             'items.product',
-            'purchaseOrder.activity_type',  // ✅ TAMBAH
+            'purchaseOrder.activity_type',
             'quotation.activityType',
-        ]);
+        ])
+        ->where('company_id', $companyId); // ✅ auto-filter, hapus if has('company_id')
 
-        // Filter by company
-        if ($request->has('company_id')) {
-            $query->where('company_id', $request->company_id);
-        }
-
-        // Filter by status
-        if ($request->has('status')) {
+        if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
 
-        // Filter by PO
-        if ($request->has('po_id')) {
+        if ($request->filled('po_id')) {
             $query->where('po_id', $request->po_id);
         }
 
-        // Filter by quotation
-        if ($request->has('quotation_id')) {
+        if ($request->filled('quotation_id')) {
             $query->where('quotation_id', $request->quotation_id);
         }
 
-        // Filter by invoice
-        if ($request->has('invoice_id')) {
+        if ($request->filled('invoice_id')) {
             $query->where('invoice_id', $request->invoice_id);
         }
 
-        // Search
-        if ($request->has('search')) {
+        if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('delivery_note_number', 'like', "%{$search}%")
                     ->orWhere('recipient_name', 'like', "%{$search}%")
                     ->orWhere('recipient_address', 'like', "%{$search}%");
             });
-        }
-
-        if ($request->has('status')) {
-            $query->where('status', $request->status);
-        }
-
-        if ($request->has('po_id')) {
-            $query->where('po_id', $request->po_id);
-        }
-
-        if ($request->has('quotation_id')) {
-            $query->where('quotation_id', $request->quotation_id);
         }
 
         $sortBy = $request->get('sort_by', 'delivery_note_id');
@@ -112,8 +90,10 @@ class DeliveryNoteController extends Controller
      */
     public function store(Request $request)
     {
+        $companyId = $this->getCompanyId($request); // ✅
+
         $validator = Validator::make($request->all(), [
-            'company_id' => 'required|exists:companies,company_id',
+            // ✅ company_id tidak perlu dari request, diambil dari session
             'invoice_id' => 'nullable|exists:invoices,invoice_id',
             'po_id' => 'nullable|exists:purchase_orders,po_id',
             'quotation_id' => 'nullable|exists:quotations,quotation_id',
@@ -142,9 +122,8 @@ class DeliveryNoteController extends Controller
         try {
             DB::beginTransaction();
 
-            // Create delivery note
             $deliveryNote = DeliveryNote::create([
-                'company_id' => $request->company_id,
+                'company_id' => $companyId, // ✅ dari session
                 'invoice_id' => $request->invoice_id,
                 'po_id' => $request->po_id,
                 'quotation_id' => $request->quotation_id,
@@ -157,7 +136,6 @@ class DeliveryNoteController extends Controller
                 'created_by' => Auth::id(),
             ]);
 
-            // Create items
             foreach ($request->items as $item) {
                 DeliveryNoteItem::create([
                     'delivery_note_id' => $deliveryNote->delivery_note_id,
@@ -191,8 +169,10 @@ class DeliveryNoteController extends Controller
      * Display the specified delivery note
      * GET /api/delivery-notes/{id}
      */
-    public function show($id)
+    public function show(Request $request, $id)
     {
+        $companyId = $this->getCompanyId($request); // ✅
+
         $deliveryNote = DeliveryNote::with([
             'company',
             'invoice.customer',
@@ -203,9 +183,11 @@ class DeliveryNoteController extends Controller
             'issuedByUser',
             'items.product',
             'stockOuts',
-            'purchaseOrder.activity_type',  // ✅ TAMBAH
+            'purchaseOrder.activity_type',
             'quotation.activityType',
-        ])->find($id);
+        ])
+        ->where('company_id', $companyId) // ✅ guard cross-company
+        ->find($id);
 
         if (!$deliveryNote) {
             return response()->json([
@@ -227,7 +209,9 @@ class DeliveryNoteController extends Controller
      */
     public function update(Request $request, $id)
     {
-        $deliveryNote = DeliveryNote::find($id);
+        $companyId = $this->getCompanyId($request); // ✅
+
+        $deliveryNote = DeliveryNote::where('company_id', $companyId)->find($id); // ✅ guard
 
         if (!$deliveryNote) {
             return response()->json([
@@ -236,7 +220,6 @@ class DeliveryNoteController extends Controller
             ], 404);
         }
 
-        // Prevent update if already issued
         if ($deliveryNote->status === 'issued') {
             return response()->json([
                 'success' => false,
@@ -244,7 +227,6 @@ class DeliveryNoteController extends Controller
             ], 409);
         }
 
-        // Decode items if sent as JSON string (from FormData)
         if ($request->has('items') && is_string($request->items)) {
             $request->merge(['items' => json_decode($request->items, true)]);
         }
@@ -275,7 +257,6 @@ class DeliveryNoteController extends Controller
         try {
             DB::beginTransaction();
 
-            // Update delivery note
             $deliveryNote->update($request->only([
                 'delivery_note_number',
                 'delivery_date',
@@ -284,12 +265,9 @@ class DeliveryNoteController extends Controller
                 'notes',
             ]));
 
-            // Update items if provided
             if ($request->has('items')) {
-                // Delete existing items
                 DeliveryNoteItem::where('delivery_note_id', $deliveryNote->delivery_note_id)->delete();
 
-                // Create new items
                 foreach ($request->items as $item) {
                     DeliveryNoteItem::create([
                         'delivery_note_id' => $deliveryNote->delivery_note_id,
@@ -324,9 +302,11 @@ class DeliveryNoteController extends Controller
      * Remove the specified delivery note
      * DELETE /api/delivery-notes/{id}
      */
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
-        $deliveryNote = DeliveryNote::find($id);
+        $companyId = $this->getCompanyId($request); // ✅
+
+        $deliveryNote = DeliveryNote::where('company_id', $companyId)->find($id); // ✅ guard
 
         if (!$deliveryNote) {
             return response()->json([
@@ -335,7 +315,6 @@ class DeliveryNoteController extends Controller
             ], 404);
         }
 
-        // Prevent delete if issued
         if ($deliveryNote->status === 'issued') {
             return response()->json([
                 'success' => false,
@@ -343,7 +322,6 @@ class DeliveryNoteController extends Controller
             ], 409);
         }
 
-        // Prevent delete if has stock out
         if ($deliveryNote->stockOuts()->exists()) {
             return response()->json([
                 'success' => false,
@@ -374,7 +352,6 @@ class DeliveryNoteController extends Controller
         $stockOutRecords = [];
 
         foreach ($deliveryNote->items as $dnItem) {
-            // ✅ Get available batches (FIFO)
             $batches = \App\Models\StockBatch::where('product_id', $dnItem->product_id)
                 ->where('company_id', $deliveryNote->company_id)
                 ->selectRaw('
@@ -397,7 +374,6 @@ class DeliveryNoteController extends Controller
 
             $totalAvailable = $batches->sum('available_qty');
 
-            // ✅ Check stock availability
             if ($totalAvailable < $dnItem->quantity) {
                 throw new \Exception(
                     "Stok tidak mencukupi untuk produk {$dnItem->product->product_name}. " .
@@ -405,7 +381,6 @@ class DeliveryNoteController extends Controller
                 );
             }
 
-            // ✅ Process FIFO deduction
             $remaining = $dnItem->quantity;
 
             foreach ($batches as $batch) {
@@ -413,7 +388,6 @@ class DeliveryNoteController extends Controller
 
                 $used = min($remaining, $batch->available_qty);
 
-                // ✅ FIX: Get selling price - ensure it's numeric, not array
                 $sellingPrice = 0;
                 if ($deliveryNote->invoice) {
                     $invoiceItem = $deliveryNote->invoice->items()
@@ -421,24 +395,20 @@ class DeliveryNoteController extends Controller
                         ->first();
 
                     if ($invoiceItem) {
-                        // ✅ FIX: Extract numeric value
                         $sellingPrice = is_numeric($invoiceItem->unit_price)
                             ? (float)$invoiceItem->unit_price
                             : (float)($dnItem->product->selling_price ?? 0);
                     }
                 }
 
-                // ✅ FIX: Fallback to product selling price
                 if ($sellingPrice == 0) {
                     $sellingPrice = (float)($dnItem->product->selling_price ?? 0);
                 }
 
-                // ✅ FIX: Ensure batch purchase_price is numeric
                 $purchasePrice = is_numeric($batch->purchase_price)
                     ? (float)$batch->purchase_price
                     : 0;
 
-                // ✅ Create Stock OUT with proper types
                 $stockOut = \App\Models\StockOut::create([
                     'company_id' => (int)$deliveryNote->company_id,
                     'product_id' => (int)$dnItem->product_id,
@@ -447,21 +417,20 @@ class DeliveryNoteController extends Controller
                     'delivery_note_id' => (int)$deliveryNote->delivery_note_id,
                     'transaction_type' => 'sale',
                     'quantity' => (int)$used,
-                    'selling_price' => (string)$sellingPrice, // ✅ FIX: Cast to string for decimal field
+                    'selling_price' => (string)$sellingPrice,
                     'out_date' => $outDate,
                     'notes' => "Auto Stock OUT dari DN {$deliveryNote->delivery_note_number}",
                     'processed_by' => $processedBy ? (int)$processedBy : null,
                     'receiving_condition' => 'good',
                 ]);
 
-                // ✅ Create stock movement with proper types
                 \App\Models\StockMovement::create([
                     'product_id' => (int)$dnItem->product_id,
                     'batch_id' => (int)$batch->batch_id,
                     'movement_type' => 'OUT',
                     'quantity' => (int)$used,
-                    'unit_cost' => (string)$purchasePrice, // ✅ FIX: Cast to string for decimal field
-                    'total_cost' => (string)($used * $purchasePrice), // ✅ FIX: Cast to string
+                    'unit_cost' => (string)$purchasePrice,
+                    'total_cost' => (string)($used * $purchasePrice),
                     'reference_id' => (int)$stockOut->stock_out_id,
                     'reference_type' => 'stock_out',
                     'movement_date' => $outDate,
@@ -472,24 +441,20 @@ class DeliveryNoteController extends Controller
                 $stockOutRecords[] = $stockOut;
                 $remaining -= $used;
 
-                // ✅ Update ending stock
                 try {
                     $date = \Carbon\Carbon::parse($outDate);
                     \App\Models\EndingStock::updateEndingStock($batch->batch_id, $date->year, $date->month);
                 } catch (\Exception $e) {
-                    // Log error but continue (ending stock update is not critical)
                     Log::warning("Failed to update ending stock: " . $e->getMessage());
                 }
             }
 
-            // ✅ Link DN item to first Stock OUT record
             if (count($stockOutRecords) > 0) {
                 try {
                     $dnItem->update([
                         'stock_out_id' => (int)$stockOutRecords[0]->stock_out_id
                     ]);
                 } catch (\Exception $e) {
-                    // ✅ FIX: If column doesn't exist, just skip (tidak critical)
                     Log::info("DN item stock_out_id update skipped: " . $e->getMessage());
                 }
             }
@@ -504,7 +469,10 @@ class DeliveryNoteController extends Controller
      */
     public function issue(Request $request, $id)
     {
+        $companyId = $this->getCompanyId($request); // ✅
+
         $deliveryNote = DeliveryNote::with(['items.product', 'company', 'invoice.items'])
+            ->where('company_id', $companyId) // ✅ guard
             ->find($id);
 
         if (!$deliveryNote) {
@@ -525,7 +493,7 @@ class DeliveryNoteController extends Controller
             'signed_name' => 'required|string|max:100',
             'signed_position' => 'required|string|max:100',
             'signed_city' => 'required|string|max:100',
-            'out_date' => 'nullable|date', // ✅ Optional, default to today
+            'out_date' => 'nullable|date',
         ]);
 
         if ($validator->fails()) {
@@ -538,7 +506,6 @@ class DeliveryNoteController extends Controller
         DB::beginTransaction();
 
         try {
-            // ✅ 1. Update delivery note status
             $deliveryNote->update([
                 'status' => 'issued',
                 'signed_name' => $request->signed_name,
@@ -549,15 +516,12 @@ class DeliveryNoteController extends Controller
                 'issued_at' => now(),
             ]);
 
-            // ✅ 2. AUTO CREATE STOCK OUT (TRIGGER POINT!)
             $outDate = $request->out_date ?? now()->format('Y-m-d');
 
-            // ✅ FIX: Add try-catch for stock OUT creation
             $stockOutRecords = [];
             try {
                 $stockOutRecords = $this->autoCreateStockOut($deliveryNote, $outDate);
             } catch (\Exception $e) {
-                // ✅ If stock OUT fails, rollback and return specific error
                 DB::rollBack();
                 return response()->json([
                     'success' => false,
@@ -578,7 +542,6 @@ class DeliveryNoteController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
 
-            // ✅ FIX: Better error logging
             Log::error('Issue Delivery Note Error: ' . $e->getMessage(), [
                 'delivery_note_id' => $id,
                 'trace' => $e->getTraceAsString()
@@ -591,12 +554,15 @@ class DeliveryNoteController extends Controller
             ], 500);
         }
     }
+
     /**
      * Create delivery note from approved purchase order
      * POST /api/delivery-notes/from-po/{po_id}
      */
-    public function createFromPurchaseOrder($poId)
+    public function createFromPurchaseOrder(Request $request, $poId)
     {
+        $companyId = $this->getCompanyId($request); // ✅
+
         try {
             $purchaseOrder = PurchaseOrder::with([
                 'company',
@@ -604,7 +570,9 @@ class DeliveryNoteController extends Controller
                 'items.product',
                 'quotation',
                 'invoices'
-            ])->find($poId);
+            ])
+            ->where('company_id', $companyId) // ✅ guard
+            ->find($poId);
 
             if (!$purchaseOrder) {
                 return response()->json([
@@ -632,8 +600,10 @@ class DeliveryNoteController extends Controller
      * Generate PDF for delivery note
      * GET /api/delivery-notes/{id}/pdf
      */
-    public function generatePDF($id)
+    public function generatePDF(Request $request, $id)
     {
+        $companyId = $this->getCompanyId($request); // ✅
+
         $deliveryNote = DeliveryNote::with([
             'company',
             'invoice.customer',
@@ -643,7 +613,9 @@ class DeliveryNoteController extends Controller
             'items.product',
             'createdByUser',
             'issuedByUser'
-        ])->find($id);
+        ])
+        ->where('company_id', $companyId) // ✅ guard
+        ->find($id);
 
         if (!$deliveryNote) {
             return response()->json([
@@ -652,7 +624,6 @@ class DeliveryNoteController extends Controller
             ], 404);
         }
 
-        // Cannot generate PDF for draft
         if ($deliveryNote->status === 'draft') {
             return response()->json([
                 'success' => false,
@@ -661,7 +632,6 @@ class DeliveryNoteController extends Controller
         }
 
         try {
-            // Determine customer from various sources
             $customer = null;
             if ($deliveryNote->invoice && $deliveryNote->invoice->customer) {
                 $customer = $deliveryNote->invoice->customer;
@@ -674,27 +644,17 @@ class DeliveryNoteController extends Controller
                 'customer' => $customer,
             ];
 
-            // Load view with data
             $pdf = Pdf::loadView('pdf.delivery-note', $data);
-
-            // Set paper size and orientation
             $pdf->setPaper('A4', 'portrait');
-
-            // Set options
             $pdf->setOptions([
                 'isHtml5ParserEnabled' => true,
                 'isRemoteEnabled' => true,
                 'defaultFont' => 'sans-serif'
             ]);
 
-            // Generate filename
             $filename = 'Surat-Jalan-' . $this->sanitizeFilename($deliveryNote->delivery_note_number) . '.pdf';
 
-            // Return PDF for download
             return $pdf->download($filename);
-
-            // Or for preview in browser:
-            // return $pdf->stream($filename);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -708,9 +668,12 @@ class DeliveryNoteController extends Controller
      * Get delivery note by number
      * GET /api/delivery-notes/by-number/{delivery_note_number}
      */
-    public function getByNumber($deliveryNoteNumber)
+    public function getByNumber(Request $request, $deliveryNoteNumber)
     {
+        $companyId = $this->getCompanyId($request); // ✅
+
         $deliveryNote = DeliveryNote::where('delivery_note_number', $deliveryNoteNumber)
+            ->where('company_id', $companyId) // ✅ guard
             ->with([
                 'company',
                 'invoice.customer',
@@ -737,10 +700,12 @@ class DeliveryNoteController extends Controller
 
     /**
      * Auto-generate delivery note number
-     * GET /api/delivery-notes/generate-number/{company_id}
+     * GET /api/delivery-notes/generate-number
      */
-    public function generateNumber($companyId)
+    public function generateNumber(Request $request)
     {
+        $companyId = $this->getCompanyId($request); // ✅ ambil dari session
+
         try {
             $company = Company::find($companyId);
 
@@ -773,9 +738,12 @@ class DeliveryNoteController extends Controller
      * Get delivery notes by PO
      * GET /api/delivery-notes/by-po/{po_id}
      */
-    public function getByPurchaseOrder($poId)
+    public function getByPurchaseOrder(Request $request, $poId)
     {
+        $companyId = $this->getCompanyId($request); // ✅
+
         $deliveryNotes = DeliveryNote::where('po_id', $poId)
+            ->where('company_id', $companyId) // ✅ guard
             ->with([
                 'company',
                 'items.product',
@@ -795,9 +763,12 @@ class DeliveryNoteController extends Controller
      * Get delivery notes by quotation
      * GET /api/delivery-notes/by-quotation/{quotation_id}
      */
-    public function getByQuotation($quotationId)
+    public function getByQuotation(Request $request, $quotationId)
     {
+        $companyId = $this->getCompanyId($request); // ✅
+
         $deliveryNotes = DeliveryNote::where('quotation_id', $quotationId)
+            ->where('company_id', $companyId) // ✅ guard
             ->with([
                 'company',
                 'purchaseOrder',

@@ -2,136 +2,121 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
 use App\Models\ProformaInvoice;
-
+use App\Models\Invoice;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
 use Exception;
 
-class ProformaInvoiceController extends Controller
+class ProformaInvoiceController extends BaseController  // ✅ extends BaseController
 {
     /* =========================
      * LIST
      * ========================= */
     public function index(Request $request)
     {
-        $query = DB::table('proforma_invoices as pi')
-            ->join('companies as co', 'pi.company_id', '=', 'co.company_id')
-            ->join('customers as cu', 'pi.customer_id', '=', 'cu.customer_id')
-            ->select(
-                'pi.proforma_id',
-                'pi.proforma_number',
-                'pi.proforma_date',
-                'pi.status',
-                'pi.subtotal',
-                'pi.tax_amount',
-                'pi.discount_amount',
-                'pi.total_amount',
-                'co.company_name',
-                'cu.customer_name',
-                'pi.valid_until',
-                'pi.signed_name',
-                'pi.signed_at',
-                'pi.created_at'
-            );
+        try {
+            $companyId = $this->getCompanyId($request); // ✅ dari BaseController
 
-        // Filters
-        if ($request->filled('company_id')) {
-            $query->where('pi.company_id', $request->company_id);
+        $query = ProformaInvoice::with([
+    'company:company_id,company_name,company_code',
+    'customer:customer_id,customer_name,address,email,phone',
+    'createdBy:user_id,full_name',
+    // ✅ Load PO dengan relasi activityType-nya
+    'purchaseOrder:po_id,po_number,activity_type_id',
+    'purchaseOrder.activityType:activity_type_id,type_name,type_code',
+])
+->where('company_id', $companyId);
+
+
+
+            if ($request->filled('status')) {
+                $query->where('status', $request->status);
+            }
+
+            if ($request->filled('search')) {
+                $query->where(function ($q) use ($request) {
+                    $q->where('proforma_number', 'like', "%{$request->search}%")
+                      ->orWhereHas('customer', fn($q2) =>
+                          $q2->where('customer_name', 'like', "%{$request->search}%")
+                      );
+                });
+            }
+
+            if ($request->filled('date_from')) {
+                $query->whereDate('proforma_date', '>=', $request->date_from);
+            }
+
+            if ($request->filled('date_to')) {
+                $query->whereDate('proforma_date', '<=', $request->date_to);
+            }
+
+            $allowedSorts = ['proforma_date', 'proforma_number', 'total_amount', 'status', 'created_at'];
+            $sortBy       = in_array($request->get('sort_by'), $allowedSorts)
+                            ? $request->get('sort_by')
+                            : 'proforma_date';
+            $sortOrder    = $request->get('sort_order', 'desc');
+
+            $query->orderBy($sortBy, $sortOrder);
+
+            $perPage = $request->get('per_page', 15);
+            $result  = $query->paginate($perPage);
+
+            return response()->json([
+                'success' => true,
+                'data'    => $result,
+            ]);
+
+        } catch (Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal memuat data proforma invoice',
+                'error'   => $e->getMessage()
+            ], 500);
         }
-
-        if ($request->filled('status')) {
-            $query->where('pi.status', $request->status);
-        }
-
-        if ($request->filled('search')) {
-            $query->where(function ($q) use ($request) {
-                $q->where('pi.proforma_number', 'like', "%{$request->search}%")
-                  ->orWhere('cu.customer_name', 'like', "%{$request->search}%");
-            });
-        }
-
-        if ($request->filled('date_from')) {
-            $query->whereDate('pi.proforma_date', '>=', $request->date_from);
-        }
-
-        if ($request->filled('date_to')) {
-            $query->whereDate('pi.proforma_date', '<=', $request->date_to);
-        }
-
-        // Sorting
-        $sortBy = $request->get('sort_by', 'proforma_date');
-        $sortOrder = $request->get('sort_order', 'desc');
-        $query->orderBy("pi.{$sortBy}", $sortOrder);
-
-        $perPage = $request->get('per_page', 15);
-        $result = $query->paginate($perPage);
-
-        return response()->json([
-            'success' => true,
-            'data' => $result->items(),
-            'current_page' => $result->currentPage(),
-            'last_page' => $result->lastPage(),
-            'per_page' => $result->perPage(),
-            'total' => $result->total(),
-        ]);
     }
-
-    
 
     /* =========================
      * DETAIL
      * ========================= */
-    public function show($id)
+    public function show(Request $request, $id)
     {
-        $pi = DB::table('proforma_invoices as pi')
-            ->join('companies as co', 'pi.company_id', '=', 'co.company_id')
-            ->join('customers as cu', 'pi.customer_id', '=', 'cu.customer_id')
-            ->leftJoin('users as creator', 'pi.created_by', '=', 'creator.user_id')
-            ->leftJoin('users as approver', 'pi.approved_by', '=', 'approver.user_id')
-            ->where('pi.proforma_id', $id)
-            ->select(
-                'pi.*',
-                'co.company_name',
-                'co.company_code',
-                'co.address as company_address',
-                'cu.customer_name',
-                'cu.address as customer_address',
-                'cu.email as customer_email',
-                'cu.phone as customer_phone',
-                'creator.full_name as created_by_name',
-                'approver.full_name as approved_by_name'
-            )
-            ->first();
+        try {
+            $companyId = $this->getCompanyId($request);
 
-        if (!$pi) {
+            $pi = ProformaInvoice::with([
+                    'company',
+                    'customer',
+                    'items.product',
+                    'createdBy:user_id,full_name',
+                    'approvedBy:user_id,full_name',
+                    'invoices:invoice_id,invoice_number,payment_status,total_amount,proforma_invoice_id',
+                ])
+                ->where('company_id', $companyId)
+                ->find($id);
+
+            if (!$pi) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Proforma invoice tidak ditemukan'
+                ], 404);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data'    => $pi,
+            ]);
+
+        } catch (Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Proforma invoice not found'
-            ], 404);
+                'message' => 'Gagal memuat detail proforma invoice',
+                'error'   => $e->getMessage()
+            ], 500);
         }
-
-        $items = DB::table('proforma_invoice_items')
-            ->join('products as p', 'proforma_invoice_items.product_id', '=', 'p.product_id')
-            ->where('proforma_id', $id)
-            ->select(
-                'proforma_invoice_items.*',
-                'p.product_code',
-                'p.unit'
-            )
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'header' => $pi,
-                'items' => $items
-            ]
-        ]);
     }
 
     /* =========================
@@ -139,72 +124,72 @@ class ProformaInvoiceController extends Controller
      * ========================= */
     public function store(Request $request)
     {
+
+         $companyId = $this->getCompanyId($request);
         $validator = Validator::make($request->all(), [
-            'company_id' => 'required|exists:companies,company_id',
-            'customer_id' => 'required|exists:customers,customer_id',
-            'po_id' => 'nullable|exists:purchase_orders,po_id',
-            'proforma_date' => 'required|date',
-            'valid_until' => 'nullable|date|after:proforma_date',
-            'tax_percentage' => 'nullable|numeric|min:0|max:100',
-            'discount_amount' => 'nullable|numeric|min:0',
-            'notes' => 'nullable|string',
-            'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|exists:products,product_id',
-            'items.*.quantity' => 'required|numeric|min:0.01',
-            'items.*.unit_price' => 'required|numeric|min:0',
+            'customer_id'           => 'required|exists:customers,customer_id',
+            'po_id'                 => 'nullable|exists:purchase_orders,po_id',
+            'proforma_date'         => 'required|date',
+            'valid_until'           => 'nullable|date|after:proforma_date',
+            'tax_percentage'        => 'nullable|numeric|min:0|max:100',
+            'discount_amount'       => 'nullable|numeric|min:0',
+            'payment_terms'         => 'nullable|string|max:255',
+            'delivery_terms'        => 'nullable|string|max:255',
+            'notes'                 => 'nullable|string',
+            'items'                 => 'required|array|min:1',
+            'items.*.product_id'    => 'required|exists:products,product_id',
+            'items.*.quantity'      => 'required|numeric|min:0.01',
+            'items.*.unit_price'    => 'required|numeric|min:0',
+            'items.*.notes'         => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
         DB::beginTransaction();
         try {
+            $companyId = $this->getCompanyId($request);
+
             $customer = DB::table('customers')
                 ->where('customer_id', $request->customer_id)
                 ->first();
 
-            // Calculate amounts
-            $subtotal = collect($request->items)
-                ->sum(fn($i) => $i['quantity'] * $i['unit_price']);
-
-            $taxPercentage = $request->tax_percentage ?? 11;
-            $taxAmount = $subtotal * ($taxPercentage / 100);
+            $subtotal       = collect($request->items)->sum(fn($i) => $i['quantity'] * $i['unit_price']);
+            $taxPercentage  = $request->tax_percentage ?? 11;
+            $taxAmount      = $subtotal * ($taxPercentage / 100);
             $discountAmount = $request->discount_amount ?? 0;
-            $totalAmount = $subtotal + $taxAmount - $discountAmount;
+            $totalAmount    = $subtotal + $taxAmount - $discountAmount;
 
-            // Generate proforma number
-            $proformaNumber = $this->generateProformaNumber($request->company_id);
+            $proformaNumber = $this->generateProformaNumber($companyId);
 
-            // Calculate valid_until (default 30 days)
-            $validUntil = $request->valid_until 
-                ? $request->valid_until 
-                : date('Y-m-d', strtotime("+30 days", strtotime($request->proforma_date)));
+            $validUntil = $request->valid_until
+                ?: date('Y-m-d', strtotime('+30 days', strtotime($request->proforma_date)));
 
-            $proformaId = DB::table('proforma_invoices')->insertGetId([
-                'company_id' => $request->company_id,
-                'customer_id' => $request->customer_id,
-                'po_id' => $request->po_id,
-                'customer_name' => $customer->customer_name,
+            $pi = ProformaInvoice::create([
+                'company_id'       => $companyId,
+                'customer_id'      => $request->customer_id,
+                'po_id'            => $request->po_id,
+                'customer_name'    => $customer->customer_name,
                 'customer_address' => $customer->address,
-                'currency' => 'IDR',
-                'proforma_number' => $proformaNumber,
-                'proforma_date' => $request->proforma_date,
-                'valid_until' => $validUntil,
-                'subtotal' => $subtotal,
-                'tax_percentage' => $taxPercentage,
-                'tax_amount' => $taxAmount,
-                'discount_amount' => $discountAmount,
-                'total_amount' => $totalAmount,
-                'status' => 'draft',
-                'notes' => $request->notes,
-                'created_by' => Auth::id(),
-                'created_at' => now(),
-                'updated_at' => now(),
+                'currency'         => 'IDR',
+                'proforma_number'  => $proformaNumber,
+                'proforma_date'    => $request->proforma_date,
+                'valid_until'      => $validUntil,
+                'subtotal'         => $subtotal,
+                'tax_percentage'   => $taxPercentage,
+                'tax_amount'       => $taxAmount,
+                'discount_amount'  => $discountAmount,
+                'total_amount'     => $totalAmount,
+                'payment_terms'    => $request->payment_terms,
+                'delivery_terms'   => $request->delivery_terms,
+                'status'           => 'draft',
+                'notes'            => $request->notes,
+                'created_by'       => Auth::id(),
             ]);
 
             foreach ($request->items as $item) {
@@ -212,14 +197,14 @@ class ProformaInvoiceController extends Controller
                     ->where('product_id', $item['product_id'])
                     ->first();
 
-                DB::table('proforma_invoice_items')->insert([
-                    'proforma_id' => $proformaId,
-                    'product_id' => $item['product_id'],
+                $pi->items()->create([
+                    'product_id'   => $item['product_id'],
                     'product_name' => $product->product_name,
-                    'quantity' => $item['quantity'],
-                    'unit' => $product->unit,
-                    'unit_price' => $item['unit_price'],
-                    'created_at' => now(),
+                    'quantity'     => $item['quantity'],
+                    'unit'         => $product->unit,
+                    'unit_price'   => $item['unit_price'],
+                    'subtotal'     => $item['quantity'] * $item['unit_price'],
+                    'notes'        => $item['notes'] ?? null,
                 ]);
             }
 
@@ -227,103 +212,111 @@ class ProformaInvoiceController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Proforma invoice created',
-                'proforma_id' => $proformaId
+                'message' => 'Proforma invoice berhasil dibuat',
+                'data'    => $pi->load(['company', 'customer', 'items.product']),
             ], 201);
 
         } catch (Exception $e) {
             DB::rollBack();
             Log::error('Error creating proforma invoice: ' . $e->getMessage());
-            
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to create proforma invoice',
-                'error' => $e->getMessage()
+                'message' => 'Gagal membuat proforma invoice',
+                'error'   => $e->getMessage()
             ], 500);
         }
     }
 
     /* =========================
-     * UPDATE DATA (DRAFT ONLY)
+     * UPDATE (DRAFT ONLY)
      * ========================= */
     public function update(Request $request, $id)
     {
-        $pi = DB::table('proforma_invoices')
-            ->where('proforma_id', $id)
-            ->first();
-
-        if (!$pi) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Proforma invoice not found'
-            ], 404);
-        }
-
-        if ($pi->status !== 'draft') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Only draft can be edited'
-            ], 422);
-        }
-
-        $validator = Validator::make($request->all(), [
-            'company_id' => 'required|exists:companies,company_id',
-            'customer_id' => 'required|exists:customers,customer_id',
-            'proforma_date' => 'required|date',
-            'items' => 'required|array|min:1',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        DB::beginTransaction();
         try {
-            // Recalculate
-            $subtotal = collect($request->items)
-                ->sum(fn($i) => $i['quantity'] * $i['unit_price']);
-            
-            $taxPercentage = $request->tax_percentage ?? 11;
-            $taxAmount = $subtotal * ($taxPercentage / 100);
+            $companyId = $this->getCompanyId($request);
+
+            $pi = ProformaInvoice::where('company_id', $companyId)->find($id);
+
+            if (!$pi) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Proforma invoice tidak ditemukan'
+                ], 404);
+            }
+
+            if ($pi->status !== 'draft') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Hanya status draft yang bisa diedit'
+                ], 422);
+            }
+
+            $validator = Validator::make($request->all(), [
+                'customer_id'           => 'required|exists:customers,customer_id',
+                'proforma_date'         => 'required|date',
+                'valid_until'           => 'nullable|date|after:proforma_date',
+                'tax_percentage'        => 'nullable|numeric|min:0|max:100',
+                'discount_amount'       => 'nullable|numeric|min:0',
+                'payment_terms'         => 'nullable|string|max:255',
+                'delivery_terms'        => 'nullable|string|max:255',
+                'notes'                 => 'nullable|string',
+                'items'                 => 'required|array|min:1',
+                'items.*.product_id'    => 'required|exists:products,product_id',
+                'items.*.quantity'      => 'required|numeric|min:0.01',
+                'items.*.unit_price'    => 'required|numeric|min:0',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Validation failed',
+                    'errors'  => $validator->errors()
+                ], 422);
+            }
+
+            DB::beginTransaction();
+
+            $subtotal       = collect($request->items)->sum(fn($i) => $i['quantity'] * $i['unit_price']);
+            $taxPercentage  = $request->tax_percentage ?? $pi->tax_percentage ?? 11;
+            $taxAmount      = $subtotal * ($taxPercentage / 100);
             $discountAmount = $request->discount_amount ?? 0;
-            $totalAmount = $subtotal + $taxAmount - $discountAmount;
+            $totalAmount    = $subtotal + $taxAmount - $discountAmount;
 
-            DB::table('proforma_invoices')
-                ->where('proforma_id', $id)
-                ->update([
-                    'company_id' => $request->company_id,
-                    'customer_id' => $request->customer_id,
-                    'proforma_date' => $request->proforma_date,
-                    'subtotal' => $subtotal,
-                    'tax_amount' => $taxAmount,
-                    'discount_amount' => $discountAmount,
-                    'total_amount' => $totalAmount,
-                    'notes' => $request->notes,
-                    'updated_at' => now()
-                ]);
+            $customer = DB::table('customers')
+                ->where('customer_id', $request->customer_id)
+                ->first();
 
-            // Delete old items
-            DB::table('proforma_invoice_items')
-                ->where('proforma_id', $id)
-                ->delete();
+            $pi->update([
+                'customer_id'      => $request->customer_id,
+                'customer_name'    => $customer->customer_name,
+                'customer_address' => $customer->address,
+                'proforma_date'    => $request->proforma_date,
+                'valid_until'      => $request->valid_until ?? $pi->valid_until,
+                'subtotal'         => $subtotal,
+                'tax_percentage'   => $taxPercentage,
+                'tax_amount'       => $taxAmount,
+                'discount_amount'  => $discountAmount,
+                'total_amount'     => $totalAmount,
+                'payment_terms'    => $request->payment_terms,
+                'delivery_terms'   => $request->delivery_terms,
+                'notes'            => $request->notes,
+            ]);
 
-            // Insert new items
+            $pi->items()->delete();
+
             foreach ($request->items as $item) {
                 $product = DB::table('products')
                     ->where('product_id', $item['product_id'])
                     ->first();
 
-                DB::table('proforma_invoice_items')->insert([
-                    'proforma_id' => $id,
-                    'product_id' => $item['product_id'],
+                $pi->items()->create([
+                    'product_id'   => $item['product_id'],
                     'product_name' => $product->product_name,
-                    'quantity' => $item['quantity'],
-                    'unit' => $product->unit,
-                    'unit_price' => $item['unit_price'],
-                    'created_at' => now(),
+                    'quantity'     => $item['quantity'],
+                    'unit'         => $product->unit,
+                    'unit_price'   => $item['unit_price'],
+                    'subtotal'     => $item['quantity'] * $item['unit_price'],
+                    'notes'        => $item['notes'] ?? null,
                 ]);
             }
 
@@ -331,271 +324,330 @@ class ProformaInvoiceController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Proforma invoice updated'
+                'message' => 'Proforma invoice berhasil diupdate',
+                'data'    => $pi->fresh(['company', 'customer', 'items.product']),
             ]);
 
         } catch (Exception $e) {
             DB::rollBack();
             return response()->json([
                 'success' => false,
-                'message' => $e->getMessage()
+                'message' => 'Gagal mengupdate proforma invoice',
+                'error'   => $e->getMessage()
             ], 500);
         }
     }
 
     /* =========================
-     * ISSUE PROFORMA (DRAFT → ISSUED)
+     * ISSUE (DRAFT → ISSUED)
      * ========================= */
-    public function issue(Request $request, $id)
-    {
-        $validator = Validator::make($request->all(), [
-            'signed_name' => 'required|string|max:100',
-            'signed_position' => 'required|string|max:100',
-            'signed_city' => 'required|string|max:50',
-        ]);
+  /* =========================
+ * ISSUE (DRAFT → ISSUED)
+ * ========================= */
+public function issue(Request $request, $id)
+{
+    $validator = Validator::make($request->all(), [
+        'signed_name'     => 'required|string|max:100',
+        'signed_position' => 'required|string|max:100',
+        'signed_city'     => 'required|string|max:50',
+        // ✅ Tambah validasi signature_image (base64 string atau file upload)
+        'signature_image' => 'nullable|string', // jika base64
+        // atau gunakan ini jika upload file:
+        // 'signature_image' => 'nullable|image|mimes:png,jpg,jpeg|max:2048',
+    ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
-        }
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'errors'  => $validator->errors()
+        ], 422);
+    }
 
-        $pi = DB::table('proforma_invoices')
-            ->where('proforma_id', $id)
-            ->first();
+    try {
+        $companyId = $this->getCompanyId($request);
+
+        $pi = ProformaInvoice::where('company_id', $companyId)->find($id);
 
         if (!$pi) {
             return response()->json([
                 'success' => false,
-                'message' => 'Proforma invoice not found'
+                'message' => 'Proforma invoice tidak ditemukan'
             ], 404);
         }
 
         if ($pi->status !== 'draft') {
             return response()->json([
                 'success' => false,
-                'message' => 'Only draft can be issued'
+                'message' => 'Hanya status draft yang bisa di-issue'
             ], 422);
         }
 
-        DB::table('proforma_invoices')
-            ->where('proforma_id', $id)
-            ->update([
-                'status' => 'issued',
-                'signed_name' => $request->signed_name,
-                'signed_position' => $request->signed_position,
-                'signed_city' => $request->signed_city,
-                'signed_at' => now(),
-                'issued_by' => Auth::id(),
-                'issued_at' => now(),
-                'updated_at' => now(),
-            ]);
+        // ✅ Handle signature_image
+        $signatureImagePath = $pi->signature_image; // pertahankan yang lama jika tidak diupdate
+
+        if ($request->filled('signature_image')) {
+            // Jika base64 → decode dan simpan sebagai file
+            $base64 = $request->signature_image;
+
+            // Strip prefix "data:image/png;base64," jika ada
+            if (str_contains($base64, ';base64,')) {
+                [, $base64] = explode(';base64,', $base64);
+            }
+
+            $decoded  = base64_decode($base64);
+            $filename = 'signatures/proforma_' . $id . '_' . time() . '.png';
+
+            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $decoded);
+
+            $signatureImagePath = $filename;
+        }
+
+        // Jika menggunakan file upload (multipart/form-data), gunakan ini sebagai alternatif:
+        // if ($request->hasFile('signature_image')) {
+        //     $signatureImagePath = $request->file('signature_image')
+        //         ->store('signatures', 'public');
+        // }
+
+        $pi->update([
+            'status'          => 'issued',
+            'signed_name'     => $request->signed_name,
+            'signed_position' => $request->signed_position,
+            'signed_city'     => $request->signed_city,
+            'signed_at'       => now(),
+            'issued_by'       => Auth::id(),
+            'issued_at'       => now(),
+            'signature_image' => $signatureImagePath, // ✅ Tambah ini
+        ]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Proforma invoice issued successfully'
+            'message' => 'Proforma invoice berhasil di-issue',
+            'data'    => $pi->fresh(['company', 'customer']),
         ]);
+
+    } catch (Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal issue proforma invoice',
+            'error'   => $e->getMessage()
+        ], 500);
     }
+}
+
 
     /* =========================
      * UPDATE STATUS
      * ========================= */
     public function updateStatus(Request $request, $id)
     {
-        $request->validate([
-            'status' => 'required|in:sent,approved,rejected,cancelled'
+        $validator = Validator::make($request->all(), [
+            'status'               => 'required|in:sent,approved,rejected,cancelled',
+            'cancellation_reason'  => 'required_if:status,cancelled|nullable|string|min:5',
         ]);
 
-        $pi = DB::table('proforma_invoices')
-            ->where('proforma_id', $id)
-            ->first();
-
-        if (!$pi) {
+        if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Not found'
-            ], 404);
-        }
-
-        // Status flow validation
-        $allowedTransitions = [
-            'issued' => ['sent', 'cancelled'],
-            'sent' => ['approved', 'rejected'],
-            'rejected' => ['sent'], // bisa dikirim ulang
-        ];
-
-        $currentStatus = $pi->status;
-        $newStatus = $request->status;
-
-        if (!isset($allowedTransitions[$currentStatus]) || 
-            !in_array($newStatus, $allowedTransitions[$currentStatus])) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Invalid status transition'
+                'errors'  => $validator->errors()
             ], 422);
         }
 
-        $updateData = [
-            'status' => $newStatus,
-            'updated_at' => now(),
-        ];
+        try {
+            $companyId = $this->getCompanyId($request);
 
-        if ($newStatus === 'approved') {
-            $updateData['approved_by'] = Auth::id();
-            $updateData['approved_at'] = now();
+            $pi = ProformaInvoice::where('company_id', $companyId)->find($id);
+
+            if (!$pi) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Proforma invoice tidak ditemukan'
+                ], 404);
+            }
+
+            $allowedTransitions = [
+                'issued'   => ['sent', 'cancelled'],
+                'sent'     => ['approved', 'rejected'],
+                'rejected' => ['sent'],
+            ];
+
+            if (
+                !isset($allowedTransitions[$pi->status]) ||
+                !in_array($request->status, $allowedTransitions[$pi->status])
+            ) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Tidak bisa ubah status dari '{$pi->status}' ke '{$request->status}'"
+                ], 422);
+            }
+
+            $updateData = ['status' => $request->status];
+
+            if ($request->status === 'approved') {
+                $updateData['approved_by'] = Auth::id();
+                $updateData['approved_at'] = now();
+            }
+
+            if ($request->status === 'cancelled') {
+                $updateData['cancellation_reason'] = $request->cancellation_reason;
+            }
+
+            $pi->update($updateData);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Status berhasil diubah ke '{$request->status}'",
+                'data'    => $pi->fresh(),
+            ]);
+
+        } catch (Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengubah status',
+                'error'   => $e->getMessage()
+            ], 500);
         }
-
-        DB::table('proforma_invoices')
-            ->where('proforma_id', $id)
-            ->update($updateData);
-
-        return response()->json(['success' => true]);
     }
 
     /* =========================
      * DELETE (DRAFT ONLY)
      * ========================= */
-    // Di ProformaInvoiceController destroy()
-public function destroy($id)
-{
-    $pi = ProformaInvoice::find($id);
+    public function destroy(Request $request, $id)
+    {
+        try {
+            $companyId = $this->getCompanyId($request);
 
-    if (!$pi) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Proforma Invoice tidak ditemukan'
-        ], 404);
+            $pi = ProformaInvoice::where('company_id', $companyId)->find($id);
+
+            if (!$pi) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Proforma invoice tidak ditemukan'
+                ], 404);
+            }
+
+            if ($pi->status !== 'draft') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Hanya proforma invoice draft yang bisa dihapus'
+                ], 422);
+            }
+
+            if ($pi->invoices()->exists()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Tidak bisa dihapus karena sudah memiliki invoice',
+                    'data'    => [
+                        'invoices_count'  => $pi->invoices()->count(),
+                        'invoice_numbers' => $pi->invoices()->pluck('invoice_number'),
+                    ]
+                ], 409);
+            }
+
+            DB::beginTransaction();
+            $pi->items()->delete();
+            $pi->delete();
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Proforma invoice berhasil dihapus',
+            ]);
+
+        } catch (Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal menghapus proforma invoice',
+                'error'   => $e->getMessage()
+            ], 500);
+        }
     }
-
-    // ✅ CHECK: Jika sudah ada invoice, tidak bisa dihapus
-    if ($pi->invoices()->exists()) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Proforma Invoice tidak bisa dihapus karena sudah memiliki invoice',
-            'data' => [
-                'invoices_count' => $pi->invoices()->count(),
-                'invoice_numbers' => $pi->invoices()->pluck('invoice_number')
-            ]
-        ], 409);
-    }
-
-    try {
-        $pi->delete();
-        return response()->json([
-            'success' => true,
-            'message' => 'Proforma Invoice berhasil dihapus'
-        ], 200);
-    } catch (\Exception $e) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Gagal menghapus Proforma Invoice',
-            'error' => $e->getMessage()
-        ], 500);
-    }
-}
-
 
     /* =========================
      * CONVERT TO INVOICE
      * ========================= */
-   /**
- * Convert proforma invoice to invoice
- */
-public function convertToInvoice($id)
-{
-    $proforma = ProformaInvoice::find($id);
+    public function convertToInvoice(Request $request, $id)
+    {
+        try {
+            $companyId = $this->getCompanyId($request);
 
-    if (!$proforma) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Proforma invoice not found'
-        ], 404);
+            $proforma = ProformaInvoice::with(['items.product', 'company', 'customer'])
+                ->where('company_id', $companyId)
+                ->find($id);
+
+            if (!$proforma) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Proforma invoice tidak ditemukan'
+                ], 404);
+            }
+
+            if ($proforma->status !== 'approved') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Hanya proforma invoice approved yang bisa dikonversi'
+                ], 422);
+            }
+
+            if ($proforma->converted_to_invoice_id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Proforma invoice sudah dikonversi ke invoice',
+                    'data'    => ['invoice_id' => $proforma->converted_to_invoice_id]
+                ], 422);
+            }
+
+            DB::beginTransaction();
+
+            $invoiceController = new InvoiceController();
+            $response = $invoiceController->createFromProformaInvoice(
+                new \Illuminate\Http\Request([
+                    'proforma_invoice_id' => $proforma->proforma_id,
+                    'invoice_date'        => now()->format('Y-m-d'),
+                    'due_date'            => now()->addDays(30)->format('Y-m-d'),
+                    'payment_terms'       => $proforma->payment_terms ?? 'Net 30 hari',
+                    'delivery_terms'      => $proforma->delivery_terms ?? 'FOB Destination',
+                ])
+            );
+
+            DB::commit();
+
+            return $response;
+
+        } catch (Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengkonversi ke invoice',
+                'error'   => $e->getMessage()
+            ], 500);
+        }
     }
-
-    // Validasi status
-    if ($proforma->status !== 'approved') {
-        return response()->json([
-            'success' => false,
-            'message' => 'Only approved proforma invoices can be converted to invoice'
-        ], 422);
-    }
-
-    if ($proforma->converted_to_invoice_id) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Proforma invoice already converted to invoice',
-            'data' => [
-                'invoice_id' => $proforma->converted_to_invoice_id
-            ]
-        ], 422);
-    }
-
-    try {
-        DB::beginTransaction();
-
-        // Generate invoice number
-        $lastInvoice = \App\Models\Invoice::where('company_id', $proforma->company_id)
-            ->orderBy('invoice_id', 'desc')
-            ->first();
-        
-        $nextNumber = $lastInvoice ? (int)substr($lastInvoice->invoice_number, -4) + 1 : 1;
-        $invoiceNumber = 'INV-' . date('Ym') . '-' . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
-
-        // Calculate due date (default 30 days dari invoice date)
-        $invoiceDate = now();
-        $dueDate = now()->addDays(30);
-
-        // Call InvoiceController method
-        $invoiceController = new \App\Http\Controllers\Api\InvoiceController();
-        $response = $invoiceController->createFromProformaInvoice(new \Illuminate\Http\Request([
-            'proforma_invoice_id' => $proforma->proforma_id,
-            'invoice_number' => $invoiceNumber,
-            'invoice_date' => $invoiceDate->format('Y-m-d'),
-            'due_date' => $dueDate->format('Y-m-d'),
-            'payment_terms' => $proforma->payment_terms,
-            'delivery_terms' => $proforma->delivery_terms,
-        ]));
-
-        DB::commit();
-
-        return $response;
-
-    } catch (\Exception $e) {
-        DB::rollBack();
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to convert to invoice',
-            'error' => $e->getMessage()
-        ], 500);
-    }
-}
 
     /* =========================
      * NUMBER GENERATOR
      * ========================= */
-    private function generateProformaNumber($companyId)
+    private function generateProformaNumber(int $companyId): string
     {
         $company = DB::table('companies')
             ->where('company_id', $companyId)
             ->first();
 
-        $code = $company->company_code ?? 'UNK';
-        $year = date('Y');
+        $code  = $company->company_code ?? 'UNK';
+        $year  = date('Y');
         $month = date('m');
 
-        $last = DB::table('proforma_invoices')
-            ->where('company_id', $companyId)
+        $last = ProformaInvoice::where('company_id', $companyId)
             ->whereYear('proforma_date', $year)
             ->whereMonth('proforma_date', $month)
             ->orderByDesc('proforma_id')
+            ->lockForUpdate()
             ->first();
 
         $num = $last
-            ? intval(substr($last->proforma_number, -5)) + 1
+            ? (int) substr($last->proforma_number, -5) + 1
             : 1;
 
-        return "PI/{$code}/{$year}/{$month}/" .
-            str_pad($num, 5, '0', STR_PAD_LEFT);
+        return "PI/{$code}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
     }
 }

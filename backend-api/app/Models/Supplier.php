@@ -9,7 +9,7 @@ class Supplier extends Model
 {
     use HasFactory;
 
-    protected $table = 'suppliers';
+    protected $table      = 'suppliers';
     protected $primaryKey = 'supplier_id';
 
     protected $fillable = [
@@ -18,9 +18,21 @@ class Supplier extends Model
         'email',
         'phone',
         'address',
+        'supplier_type',        // ✅ tambah: manufacturer, distributor, dll
+        'is_dropship_enabled',  // ✅ tambah
+        'notes',                // ✅ tambah
     ];
 
-public function products()
+    protected $casts = [
+        'is_dropship_enabled' => 'boolean',
+    ];
+
+    /* ================= RELATIONSHIPS ================= */
+
+    /**
+     * Supplier bisa punya banyak product via pivot product_suppliers
+     */
+    public function products()
     {
         return $this->belongsToMany(
             Product::class,
@@ -29,24 +41,45 @@ public function products()
             'product_id',
             'supplier_id',
             'product_id'
-        )->withPivot(['purchase_price', 'priority', 'is_active', 'min_order_qty', 'lead_time_days'])
-         ->withTimestamps();
+        )
+        ->withPivot([
+            'purchase_price',
+            'priority',
+            'is_active',
+            'is_primary',
+            'min_order_qty',
+            'lead_time_days',
+        ])
+        ->withTimestamps();
     }
 
-     public function supplierPurchaseOrders()
+    /**
+     * ✅ FIXED: hapus purchaseOrders() yang pakai SupplierPo (tidak ada)
+     * Cukup satu relasi ke SupplierPurchaseOrder
+     */
+    public function supplierPurchaseOrders()
     {
         return $this->hasMany(SupplierPurchaseOrder::class, 'supplier_id', 'supplier_id');
     }
-    public function purchaseOrders()
-    {
-        return $this->hasMany(SupplierPo::class, 'supplier_id', 'supplier_id');
-    }
-
-      /* ---- Static helpers ---- */
 
     /**
-     * Cari supplier berdasarkan nama (exact / like)
+     * Supplier punya banyak ProductSupplier (pivot records)
      */
+    public function productSuppliers()
+    {
+        return $this->hasMany(ProductSupplier::class, 'supplier_id', 'supplier_id');
+    }
+
+    /**
+     * Stock batches yang dikirim supplier ini
+     */
+    public function stockBatches()
+    {
+        return $this->hasMany(StockBatch::class, 'supplier_id', 'supplier_id');
+    }
+
+    /* ================= STATIC HELPERS ================= */
+
     public static function findByName(string $name, bool $exact = false): ?self
     {
         $query = self::query();
@@ -60,9 +93,6 @@ public function products()
         return $query->first();
     }
 
-    /**
-     * Cari banyak supplier berdasarkan nama
-     */
     public static function searchByName(string $name)
     {
         return self::where('supplier_name', 'like', '%' . $name . '%')->get();

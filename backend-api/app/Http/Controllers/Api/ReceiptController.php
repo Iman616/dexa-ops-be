@@ -16,62 +16,70 @@ class ReceiptController extends Controller
     /**
      * Display a listing of receipts
      */
-    public function index(Request $request)
-    {
-        $query = Receipt::with([
-            'company:company_id,company_name',
-            'invoice.customer',
-            'payment',
-            'createdByUser:user_id,full_name'
-        ]);
+   public function index(Request $request)
+{
+    $query = Receipt::with([
+        'company:company_id,company_name',
+        'invoice.customer',
+        'payment',
+        'createdByUser:user_id,full_name'
+    ]);
 
-        // Filter by company
-        if ($request->has('company_id')) {
-            $query->where('company_id', $request->company_id);
-        }
-
-        // Filter by invoice
-        if ($request->has('invoice_id')) {
-            $query->where('invoice_id', $request->invoice_id);
-        }
-
-        // Filter by payment
-        if ($request->has('payment_id')) {
-            $query->where('payment_id', $request->payment_id);
-        }
-
-        // Filter by date range
-        if ($request->has('start_date')) {
-            $query->whereDate('receipt_date', '>=', $request->start_date);
-        }
-        if ($request->has('end_date')) {
-            $query->whereDate('receipt_date', '<=', $request->end_date);
-        }
-
-        // Search
-        if ($request->has('search')) {
-            $search = $request->search;
-            $query->where(function($q) use ($search) {
-                $q->where('receipt_number', 'like', "%{$search}%")
-                  ->orWhere('received_from', 'like', "%{$search}%");
-            });
-        }
-
-        // Sorting
-        $sortBy = $request->get('sort_by', 'receipt_date');
-        $sortOrder = $request->get('sort_order', 'desc');
-        $query->orderBy($sortBy, $sortOrder);
-
-        // Pagination
-        $perPage = $request->get('per_page', 15);
-        $receipts = $query->paginate($perPage);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Receipts retrieved successfully',
-            'data' => $receipts
-        ], 200);
+    // Filter by company
+    if ($request->filled('company_id')) {
+        $query->where('company_id', $request->company_id);
     }
+
+    // Filter by invoice
+    if ($request->filled('invoice_id')) {
+        $query->where('invoice_id', $request->invoice_id);
+    }
+
+    // Filter by payment
+    if ($request->filled('payment_id')) {
+        $query->where('payment_id', $request->payment_id);
+    }
+
+    // Filter by date range — pakai filled() bukan has()
+    // filled() = ada DAN tidak null/kosong
+    if ($request->filled('start_date')) {
+        $query->whereDate('receipt_date', '>=', $request->start_date);
+    }
+
+    if ($request->filled('end_date')) {
+        $query->whereDate('receipt_date', '<=', $request->end_date);
+    }
+
+    // Search
+    if ($request->filled('search')) {
+        $search = $request->search;
+        $query->where(function ($q) use ($search) {
+            $q->where('receipt_number', 'like', "%{$search}%")
+              ->orWhere('received_from', 'like', "%{$search}%");
+        });
+    }
+
+    // Sorting — whitelist kolom supaya aman dari SQL injection
+    $allowedSortBy = ['receipt_date', 'amount', 'receipt_number', 'created_at'];
+    $sortBy = in_array($request->get('sort_by'), $allowedSortBy)
+        ? $request->get('sort_by')
+        : 'receipt_date';
+
+    $sortOrder = $request->get('sort_order') === 'asc' ? 'asc' : 'desc';
+
+    $query->orderBy($sortBy, $sortOrder);
+
+    // Pagination
+    $perPage = (int) $request->get('per_page', 15);
+    $receipts = $query->paginate($perPage);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Receipts retrieved successfully',
+        'data' => $receipts
+    ], 200);
+}
+
 
     /**
      * Store a newly created receipt

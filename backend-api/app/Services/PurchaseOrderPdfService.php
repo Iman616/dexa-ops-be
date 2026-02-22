@@ -78,36 +78,33 @@ class PurchaseOrderPdfService
     /**
      * ✅ PERBAIKAN: Prepare data PDF dengan perhitungan manual
      */
-    private function preparePdfData(PurchaseOrder $po)
-    {
-        $po->load(['company', 'customer', 'items']);
+private function preparePdfData(PurchaseOrder $po)
+{
+    // ✅ Tambah items.product agar brand & katalog bisa diakses
+    $po->load(['company', 'customer', 'items.product']);
 
-        // ✅ Hitung subtotal dari semua items
-        $subtotal = 0;
-        foreach ($po->items as $item) {
-            $itemSubtotal = $item->quantity * $item->unit_price;
-            $discountAmount = $itemSubtotal * ($item->discount_percent / 100);
-            $itemTotal = $itemSubtotal - $discountAmount;
-            $subtotal += $itemTotal;
-        }
-
-        // ✅ Hitung PPN 11%
-        $ppn = $subtotal * 0.11;
-        
-        // ✅ Grand Total
-        $grand_total = $subtotal + $ppn;
-
-        return [
-            'po' => $po,
-            'company' => $po->company,
-            'customer' => $po->customer,
-            'items' => $po->items,
-            'subtotal' => $subtotal,      // ✅ Total setelah diskon
-            'ppn' => $ppn,                 // ✅ 11% dari subtotal
-            'ppn_percent' => 11,
-            'grand_total' => $grand_total, // ✅ Subtotal + PPN
-        ];
+    $subtotal = 0;
+    foreach ($po->items as $item) {
+        $itemSubtotal   = $item->quantity * $item->unit_price;
+        $discountAmount = $itemSubtotal * ($item->discount_percent / 100);
+        $item->total    = $itemSubtotal - $discountAmount; // ✅ Fix bug katalog null
+        $subtotal      += $item->total;
     }
+
+    $ppn         = $subtotal * 0.11;
+    $grand_total = $subtotal + $ppn;
+
+    return [
+        'po'          => $po,
+        'company'     => $po->company,
+        'customer'    => $po->customer,
+        'items'       => $po->items,
+        'subtotal'    => $subtotal,
+        'ppn'         => $ppn,
+        'ppn_percent' => 11,
+        'grand_total' => $grand_total,
+    ];
+}
 
     /**
      * Helper format rupiah

@@ -33,6 +33,8 @@ class PurchaseOrder extends Model
         'created_by',
         'issued_by',
         'issued_at',
+        'work_package',  
+        'activity_name',  
     ];
 
     protected $casts = [
@@ -55,6 +57,12 @@ class PurchaseOrder extends Model
         'activity_type_name',
         'is_tender', // ✅ NEW
     ];
+
+    // Tambah di bagian RELATIONSHIPS, setelah relasi invoices()
+public function proformaInvoices()
+{
+    return $this->hasMany(ProformaInvoice::class, 'po_id', 'po_id');
+}
 
     /* ================= RELATIONSHIPS ================= */
    public function validateStockAvailability()
@@ -376,6 +384,8 @@ class PurchaseOrder extends Model
             Storage::disk('public')->delete($this->po_customer_file_path);
         }
     }
+
+    
 
     protected static function boot()
     {

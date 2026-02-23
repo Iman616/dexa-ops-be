@@ -424,7 +424,7 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
     /* ================================================================
      * UPDATE STATUS
      * ================================================================ */
-  public function updateStatus(Request $request, $id)
+public function updateStatus(Request $request, $id)
 {
     $companyId = $this->getCompanyId($request);
 
@@ -443,7 +443,9 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
     }
 
     $validator = Validator::make($request->all(), [
-        'status' => 'required|in:draft,issued,sent,approved,processing,completed,cancelled',
+        'status'       => 'required|in:draft,issued,sent,approved,processing,completed,cancelled',
+        // ✅ Wajib diisi saat approve
+        'payment_type' => 'required_if:status,approved|in:dp,full',
     ]);
 
     if ($validator->fails()) {
@@ -454,16 +456,15 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
         ], 422);
     }
 
-    $oldStatus      = $po->status;
-    $newStatus      = $request->status;
-    $createProforma = $request->boolean('create_proforma', true); // ✅ tangkap sekali di sini
-    $forceApprove   = $request->boolean('force_approve', false);
+    $oldStatus    = $po->status;
+    $newStatus    = $request->status;
+    $paymentType  = $request->input('payment_type', 'full'); // 'dp' atau 'full'
+    $forceApprove = $request->boolean('force_approve', false);
 
-    // ✅ Validate stock saat approve (sebelum transaction)
+    // ✅ Validate stock saat approve
     if ($newStatus === 'approved' && $oldStatus !== 'approved') {
         if (!$forceApprove) {
             $validation = $po->validateStockAvailability();
-
             if (!$validation['is_valid']) {
                 return response()->json([
                     'success'          => false,
@@ -479,9 +480,8 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
     try {
         $po->update(['status' => $newStatus]);
 
-        // ✅ Panggil handlePOApproval SEKALI saja, dengan param yang benar
         if ($newStatus === 'approved' && $oldStatus !== 'approved') {
-            $this->handlePOApproval($po, $createProforma);
+            $this->handlePOApproval($po, $paymentType);
         }
 
         DB::commit();
@@ -492,6 +492,8 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
             'bankGuarantees',
             'tenderDocuments',
             'deliveryNotes',
+            'proformaInvoices',
+            'invoices',
         ]);
 
         return response()->json([
@@ -499,6 +501,7 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
             'message' => 'Purchase order status updated successfully',
             'data'    => $po,
         ], 200);
+
     } catch (\Exception $e) {
         DB::rollBack();
         return response()->json([
@@ -780,106 +783,196 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
         ];
     }
 
-    private function handlePOApproval(PurchaseOrder $po, bool $createProforma = true): void
-    {
-        if ($po->is_tender) {
-            $this->createTenderProject($po);
-        }
-        $this->createDeliveryNote($po);
-
-        // ✅ Hanya buat PI kalau admin pilih yes
-        if ($createProforma) {
-            $this->autoGenerateProformaInvoice($po);
-        }
+   private function handlePOApproval(PurchaseOrder $po, string $paymentType = 'full'): void
+{
+    // Tender project (selalu dibuat jika tender)
+    if ($po->is_tender) {
+        $this->createTenderProject($po);
     }
 
-    private function autoGenerateProformaInvoice(PurchaseOrder $po): void
-    {
-        $sudahAdaPI = ProformaInvoice::where('po_id', $po->po_id)
-            ->whereNotIn('status', ['cancelled', 'rejected'])
-            ->exists();
+    // ✅ Selalu generate PI
+    $pi = $this->autoGenerateProformaInvoice($po, $paymentType);
 
-        if ($sudahAdaPI) {
-            return;
-        }
+    // ✅ Selalu generate Delivery Note
+    $this->createDeliveryNote($po);
 
-        // ✅ Skip jika PO tidak punya items
-        if ($po->items->isEmpty()) {
-            return;
-        }
+    // ✅ Hanya generate Invoice jika full payment
+    if ($paymentType === 'full' && $pi) {
+        $this->autoGenerateInvoice($po, $pi);
+    }
+}
 
-        try {
-            // Hitung amount dari PO items
-            $subtotal = $po->items->sum(function ($item) {
-                $gross    = (float) $item->quantity * (float) $item->unit_price;
-                $discount = $gross * ((float) ($item->discount_percent ?? 0) / 100);
-                return $gross - $discount;
-            });
 
-            $taxPercentage  = 11; // default PPN Indonesia
-            $taxAmount      = $subtotal * ($taxPercentage / 100);
-            $totalAmount    = $subtotal + $taxAmount;
 
-            // Generate nomor PI
-            $companyCode = $po->company?->company_code ?? 'XXX';
-            $year        = date('Y');
-            $month       = date('m');
+   private function autoGenerateProformaInvoice(PurchaseOrder $po, string $paymentType = 'full'): ?ProformaInvoice
+{
+    $sudahAdaPI = ProformaInvoice::where('po_id', $po->po_id)
+        ->whereNotIn('status', ['cancelled', 'rejected'])
+        ->exists();
 
-            $last = ProformaInvoice::where('company_id', $po->company_id)
-                ->whereYear('proforma_date', $year)
-                ->whereMonth('proforma_date', $month)
-                ->orderByDesc('proforma_id')
-                ->lockForUpdate()
-                ->first();
+    if ($sudahAdaPI) {
+        return null;
+    }
 
-            $num           = $last ? ((int) substr($last->proforma_number, -5) + 1) : 1;
-            $proformaNumber = "PI/{$companyCode}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
+    if ($po->items->isEmpty()) {
+        return null;
+    }
 
-            // Buat PI
-            $pi = ProformaInvoice::create([
-                'company_id'      => $po->company_id,
-                'customer_id'     => $po->customer_id,
-                'po_id'           => $po->po_id,
-                'proforma_number' => $proformaNumber,
-                'proforma_date'   => now()->format('Y-m-d'),
-                'valid_until'     => now()->addDays(30)->format('Y-m-d'),
-                'subtotal'        => $subtotal,
-                'tax_percentage'  => $taxPercentage,
-                'tax_amount'      => $taxAmount,
-                'discount_amount' => 0,
-                'total_amount'    => $totalAmount,
-                'payment_terms'   => 'Net 30 hari',
-                'delivery_terms'  => 'FOB Destination',
-                'status'          => 'draft', // ✅ Draft dulu, admin bisa review/cancel
-                'notes'           => "Auto-generated dari PO {$po->po_number}",
-                'created_by'      => Auth::id(),
+    try {
+        $subtotal = $po->items->sum(function ($item) {
+            $gross    = (float) $item->quantity * (float) $item->unit_price;
+            $discount = $gross * ((float) ($item->discount_percent ?? 0) / 100);
+            return $gross - $discount;
+        });
+
+        $taxPercentage = 11;
+        $taxAmount     = $subtotal * ($taxPercentage / 100);
+        $totalAmount   = $subtotal + $taxAmount;
+
+        $companyCode = $po->company?->company_code ?? 'XXX';
+        $year        = date('Y');
+        $month       = date('m');
+
+        $last = ProformaInvoice::where('company_id', $po->company_id)
+            ->whereYear('proforma_date', $year)
+            ->whereMonth('proforma_date', $month)
+            ->orderByDesc('proforma_id')
+            ->lockForUpdate()
+            ->first();
+
+        $num            = $last ? ((int) substr($last->proforma_number, -5) + 1) : 1;
+        $proformaNumber = "PI/{$companyCode}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
+
+        // ✅ Tandai di notes apakah ini DP atau Full
+        $paymentNote = $paymentType === 'dp'
+            ? 'Pembayaran: Down Payment (DP). Invoice akan diterbitkan setelah pelunasan.'
+            : 'Pembayaran: Full Payment.';
+
+        $pi = ProformaInvoice::create([
+            'company_id'      => $po->company_id,
+            'customer_id'     => $po->customer_id,
+            'po_id'           => $po->po_id,
+            'proforma_number' => $proformaNumber,
+            'proforma_date'   => now()->format('Y-m-d'),
+            'valid_until'     => now()->addDays(30)->format('Y-m-d'),
+            'subtotal'        => $subtotal,
+            'tax_percentage'  => $taxPercentage,
+            'tax_amount'      => $taxAmount,
+            'discount_amount' => 0,
+            'total_amount'    => $totalAmount,
+            'payment_terms'   => $paymentType === 'dp' ? 'DP terlebih dahulu, pelunasan menyusul' : 'Full Payment',
+            'delivery_terms'  => 'FOB Destination',
+            'status'          => 'draft',
+            'notes'           => "Auto-generated dari PO {$po->po_number}. {$paymentNote}",
+            'created_by'      => Auth::id(),
+        ]);
+
+        foreach ($po->items as $poItem) {
+            ProformaInvoiceItem::create([
+                'proforma_id'         => $pi->proforma_id,
+                'product_id'          => $poItem->product_id,
+                'product_name'        => $poItem->product_name,
+                'product_description' => $poItem->specification,
+                'quantity'            => $poItem->quantity,
+                'unit'                => $poItem->unit,
+                'unit_price'          => $poItem->unit_price,
+                'notes'               => $poItem->notes,
             ]);
-
-            // Buat PI items dari PO items
-            foreach ($po->items as $poItem) {
-                ProformaInvoiceItem::create([
-                    'proforma_id'          => $pi->proforma_id,
-                    'product_id'           => $poItem->product_id,
-                    'product_name'         => $poItem->product_name,
-                    'product_description'  => $poItem->specification,
-                    'quantity'             => $poItem->quantity,
-                    'unit'                 => $poItem->unit,
-                    'unit_price'           => $poItem->unit_price,
-                    'notes'                => $poItem->notes,
-                ]);
-            }
-
-            \Illuminate\Support\Facades\Log::info(
-                "Auto-generated PI {$pi->proforma_number} dari PO {$po->po_number}"
-            );
-        } catch (\Exception $e) {
-            // ✅ Jangan gagalkan approval PO kalau PI gagal dibuat
-            // Log saja, proses tetap lanjut
-            \Illuminate\Support\Facades\Log::error(
-                "Gagal auto-generate PI untuk PO {$po->po_number}: " . $e->getMessage()
-            );
         }
+
+        \Illuminate\Support\Facades\Log::info(
+            "Auto-generated PI {$pi->proforma_number} dari PO {$po->po_number} [{$paymentType}]"
+        );
+
+        return $pi;
+
+    } catch (\Exception $e) {
+        \Illuminate\Support\Facades\Log::error(
+            "Gagal auto-generate PI untuk PO {$po->po_number}: " . $e->getMessage()
+        );
+        return null;
     }
+}
+
+private function autoGenerateInvoice(PurchaseOrder $po, ProformaInvoice $pi): void
+{
+    // Guard: jangan double invoice
+    $sudahAda = \App\Models\Invoice::where('po_id', $po->po_id)
+        ->orWhere('proforma_invoice_id', $pi->proforma_id)
+        ->exists();
+
+    if ($sudahAda) {
+        return;
+    }
+
+    try {
+        $companyCode = $po->company?->company_code ?? 'XXX';
+        $year        = date('Y');
+        $month       = date('m');
+
+        $last = \App\Models\Invoice::where('company_id', $po->company_id)
+            ->whereYear('invoice_date', $year)
+            ->whereMonth('invoice_date', $month)
+            ->orderByDesc('invoice_id')
+            ->lockForUpdate()
+            ->first();
+
+        $num           = $last ? ((int) substr($last->invoice_number, -5) + 1) : 1;
+        $invoiceNumber = "INV/{$companyCode}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
+
+        $invoice = \App\Models\Invoice::create([
+            'company_id'          => $po->company_id,
+            'customer_id'         => $po->customer_id,
+            'po_id'               => $po->po_id,
+            'proforma_invoice_id' => $pi->proforma_id,
+            'invoice_number'      => $invoiceNumber,
+            'invoice_date'        => now()->format('Y-m-d'),
+            'due_date'            => now()->addDays(30)->format('Y-m-d'),
+            'subtotal'            => $pi->subtotal,
+            'tax_percentage'      => $pi->tax_percentage,
+            'tax_amount'          => $pi->tax_amount,
+            'discount_amount'     => $pi->discount_amount,
+            'total_amount'        => $pi->total_amount,
+            'payment_status'      => 'unpaid',
+            'payment_terms'       => 'Full Payment',
+            'delivery_terms'      => 'FOB Destination',
+            'currency'            => 'IDR',
+            'notes'               => "Auto-generated dari PO {$po->po_number} (Full Payment)",
+            'created_by'          => Auth::id(),
+        ]);
+
+        // Copy items dari PI ke Invoice
+        foreach ($pi->items as $piItem) {
+            \App\Models\InvoiceItem::create([
+                'invoice_id'          => $invoice->invoice_id,
+                'product_id'          => $piItem->product_id,
+                'product_name'        => $piItem->product_name,
+                'product_description' => $piItem->product_description,
+                'quantity'            => $piItem->quantity,
+                'unit'                => $piItem->unit,
+                'unit_price'          => $piItem->unit_price,
+                'notes'               => $piItem->notes,
+            ]);
+        }
+
+        // ✅ Update PI status jadi converted
+        $pi->update([
+            'status'                  => 'converted',
+            'converted_to_invoice_id' => $invoice->invoice_id,
+            'converted_at'            => now(),
+        ]);
+
+        \Illuminate\Support\Facades\Log::info(
+            "Auto-generated Invoice {$invoice->invoice_number} dari PO {$po->po_number} [Full Payment]"
+        );
+
+    } catch (\Exception $e) {
+        \Illuminate\Support\Facades\Log::error(
+            "Gagal auto-generate Invoice untuk PO {$po->po_number}: " . $e->getMessage()
+        );
+        // Tidak throw — approval PO tetap sukses meskipun invoice gagal
+    }
+}
 
     private function createTenderProject(PurchaseOrder $po): void
     {

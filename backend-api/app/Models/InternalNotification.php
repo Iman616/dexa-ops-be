@@ -1,5 +1,4 @@
 <?php
-// app/Models/InternalNotification.php
 
 namespace App\Models;
 
@@ -7,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class InternalNotification extends Model
 {
-    protected $table = 'internal_notifications';
+    protected $table      = 'internal_notifications';
     protected $primaryKey = 'notification_id';
 
     protected $fillable = [
@@ -26,42 +25,47 @@ class InternalNotification extends Model
     ];
 
     protected $casts = [
+        'meta'         => 'array',
         'scheduled_at' => 'datetime',
-        'sent_at' => 'datetime',
-        'read_at' => 'datetime',
-        'meta' => 'array',
+        'sent_at'      => 'datetime',
+        'read_at'      => 'datetime',
     ];
+
+    /* ─── Relationships ─── */
 
     public function user()
     {
         return $this->belongsTo(User::class, 'user_id', 'user_id');
     }
 
-    public function scopeUnread($query)
+    /* ─── Scopes ─── */
+
+    public function scopeUnread($q)
     {
-        return $query->whereNull('read_at')->where('status', 'sent');
+        return $q->whereNull('read_at');
     }
 
-    public function markAsSent(): void
+    public function scopeForUser($q, int $userId)
     {
-        $this->update([
-            'status' => 'sent',
-            'sent_at' => now(),
-        ]);
+        return $q->where('user_id', $userId);
     }
+
+    public function scopeByType($q, string $type)
+    {
+        return $q->where('type', $type);
+    }
+
+    /* ─── Helpers ─── */
 
     public function markAsRead(): void
     {
-        $this->update([
-            'status' => 'read',
-            'read_at' => now(),
-        ]);
+        if (!$this->read_at) {
+            $this->update(['read_at' => now()]);
+        }
     }
 
-    public function dismiss(): void
+    public function isRead(): bool
     {
-        $this->update([
-            'status' => 'dismissed',
-        ]);
+        return !is_null($this->read_at);
     }
 }

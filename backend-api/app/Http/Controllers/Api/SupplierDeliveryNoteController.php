@@ -17,6 +17,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
+use App\Services\NotificationService;
+
 
 class SupplierDeliveryNoteController extends Controller
 {
@@ -329,7 +331,7 @@ class SupplierDeliveryNoteController extends Controller
      * Receive goods from delivery note → Create Stock In + Auto-upsert ProductSupplier
      * POST /api/supplier-delivery-notes/{id}/receive
      */
-    public function receiveGoods(Request $request, $id)
+public function receiveGoods(Request $request, $id)
     {
         $validator = Validator::make($request->all(), [
             'receiver_name'             => 'required|string|max:100',
@@ -340,25 +342,18 @@ class SupplierDeliveryNoteController extends Controller
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation error',
-                'errors'  => $validator->errors(),
-            ], 422);
+            return response()->json(['success' => false, 'message' => 'Validation error', 'errors' => $validator->errors()], 422);
         }
 
         try {
             DB::beginTransaction();
 
-            $deliveryNote = SupplierDeliveryNote::with(['items.product', 'company'])
+            $deliveryNote = SupplierDeliveryNote::with(['items.product', 'company', 'supplier'])
                 ->lockForUpdate()
                 ->findOrFail($id);
 
             if ($deliveryNote->status !== 'pending') {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Delivery note sudah diproses atau dibatalkan',
-                ], 422);
+                return response()->json(['success' => false, 'message' => 'Delivery note sudah diproses atau dibatalkan'], 422);
             }
 
             $receivedDatetime = $request->received_datetime
@@ -369,7 +364,7 @@ class SupplierDeliveryNoteController extends Controller
 
             foreach ($deliveryNote->items as $item) {
 
-                // 1) Create or update stock batch
+                // 1. Batch
                 $batch = StockBatch::firstOrCreate(
                     [
                         'company_id'   => $deliveryNote->company_id,
@@ -389,7 +384,7 @@ class SupplierDeliveryNoteController extends Controller
                     ]
                 );
 
-                // 2) Create StockIn record
+                // 2. StockIn
                 $stockIn = StockIn::create([
                     'company_id'                     => $deliveryNote->company_id,
                     'product_id'                     => $item->product_id,
@@ -407,53 +402,44 @@ class SupplierDeliveryNoteController extends Controller
                     'created_by'                     => Auth::id(),
                 ]);
 
-                // 3) Update batch quantity
+                // 3. Update qty batch
                 $batch->increment('quantity_available', $item->quantity);
-
                 if ($batch->wasRecentlyCreated) {
                     $batch->update(['quantity_initial' => $batch->quantity_available]);
                 }
 
-                // 4) Stock movement
+                // 4. Stock movement
                 StockMovement::create([
-                    'product_id'    => $item->product_id,
-                    'batch_id'      => $batch->batch_id,
-                    'movement_type' => 'in',
-                    'quantity'      => $item->quantity,
-                    'unit_cost'     => $item->purchase_price,
-                    'reference_id'  => $deliveryNote->supplier_delivery_note_id,
-                    'reference_type'=> 'supplier_delivery_note',
-                    'notes'         => 'Stock in from supplier delivery note ' . $deliveryNote->delivery_note_number,
-                    'created_by'    => Auth::id(),
+                    'product_id'     => $item->product_id,
+                    'batch_id'       => $batch->batch_id,
+                    'movement_type'  => 'in',
+                    'quantity'       => $item->quantity,
+                    'unit_cost'      => $item->purchase_price,
+                    'reference_id'   => $deliveryNote->supplier_delivery_note_id,
+                    'reference_type' => 'supplier_delivery_note',
+                    'notes'          => 'Stock in from ' . $deliveryNote->delivery_note_number,
+                    'created_by'     => Auth::id(),
                 ]);
 
-                // 5) Update link di DN item
+                // 5. Link stock_in_id ke DN item
                 $item->update(['stock_in_id' => $stockIn->stock_in_id]);
 
-                // 6) Auto-upsert ProductSupplier ← FIXED: kurung benar
+                // 6. Upsert ProductSupplier
                 if ($deliveryNote->supplier_id) {
-                    $existingPS = ProductSupplier::where('product_id', $item->product_id)
-                        ->where('supplier_id', $deliveryNote->supplier_id)
-                        ->where('company_id', $deliveryNote->company_id)
-                        ->first();
-
-                    if (!$existingPS) {
-                        ProductSupplier::create([
-                            'product_id'     => $item->product_id,
-                            'supplier_id'    => $deliveryNote->supplier_id,
-                            'company_id'     => $deliveryNote->company_id,
+                    ProductSupplier::updateOrCreate(
+                        [
+                            'product_id'  => $item->product_id,
+                            'supplier_id' => $deliveryNote->supplier_id,
+                            'company_id'  => $deliveryNote->company_id,
+                        ],
+                        [
                             'purchase_price' => $item->purchase_price,
                             'is_primary'     => false,
                             'is_active'      => true,
-                        ]);
-                    } else {
-                        $existingPS->update([
-                            'purchase_price' => $item->purchase_price,
-                        ]);
-                    }
+                        ]
+                    );
                 }
 
-                // ✅ FIXED: Ini di luar blok if supplier_id
                 $stockInRecords[] = $stockIn;
             }
 
@@ -463,20 +449,24 @@ class SupplierDeliveryNoteController extends Controller
                 'received_datetime' => $receivedDatetime,
                 'receiver_name'     => $request->receiver_name,
                 'receiver_position' => $request->receiver_position,
+                'received_by'       => Auth::id(),
             ]);
 
-            // Update Supplier PO status jika ada
+            // Update Supplier PO status
             if ($deliveryNote->supplier_po_id) {
                 $this->updateSupplierPoStatus($deliveryNote->supplier_po_id);
             }
 
-            // Auto-create draft invoice jika diminta
+            // Auto-create draft invoice
             $draftInvoice = null;
             if ($request->boolean('auto_create_draft_invoice')) {
                 $draftInvoice = $this->createDraftInvoice($deliveryNote, $request);
             }
 
             DB::commit();
+
+            // ✅ Kirim notifikasi SETELAH commit (DB sudah aman)
+            $this->sendGoodsReceivedNotifications($deliveryNote, $stockInRecords);
 
             $deliveryNote->load(['items.product', 'supplier', 'company']);
 
@@ -488,22 +478,147 @@ class SupplierDeliveryNoteController extends Controller
                     'stock_in_records' => $stockInRecords,
                     'draft_invoice'    => $draftInvoice,
                 ],
-            ], 200);
+            ]);
 
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Receive goods error', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+            Log::error('Receive goods error', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
 
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to receive goods',
-                'error'   => $e->getMessage(),
-            ], 500);
+            return response()->json(['success' => false, 'message' => 'Failed to receive goods', 'error' => $e->getMessage()], 500);
         }
     }
+
+     private function sendGoodsReceivedNotifications(
+        SupplierDeliveryNote $deliveryNote,
+        array $stockInRecords
+    ): void {
+        try {
+            $supplierName = $deliveryNote->supplier?->supplier_name ?? 'Supplier';
+            $dnNumber     = $deliveryNote->delivery_note_number;
+            $companyId    = $deliveryNote->company_id;
+            $dnId         = $deliveryNote->supplier_delivery_note_id;
+            $totalItems   = count($deliveryNote->items);
+            $totalQty     = $deliveryNote->items->sum('quantity');
+
+            // ── Bangun daftar produk yang masuk (untuk isi pesan) ──
+           $productList = $deliveryNote->items
+    ->map(function ($item) {
+        $name = $item->product?->product_name ?? '-';
+        $unit = $item->product?->unit ?? 'pcs';
+        return "{$name} ({$item->quantity} {$unit})";
+    })
+    ->join(', ');
+
+
+            // ── Kumpulkan semua user_id penerima (dedup di akhir) ──
+            $recipientIds = [];
+
+            // ── A: Notify user pembuat PO customer (jika ada link po_id) ──
+            $customerPoCreatedBy = $this->resolveCustomerPoCreatedBy($deliveryNote);
+            if ($customerPoCreatedBy) {
+                $recipientIds[] = $customerPoCreatedBy;
+
+                // Ambil info PO customer untuk pesan yang lebih informatif
+                $customerPoNumber = $this->resolveCustomerPoNumber($deliveryNote);
+
+                NotificationService::send(
+                    userId:        $customerPoCreatedBy,
+                    type:          'goods_received_from_po',
+                    title:         '📦 Barang Pesanan Sudah Masuk Gudang',
+                    message:       "Barang dari Supplier PO terkait PO Customer {$customerPoNumber} telah diterima. " .
+                                   "DN Supplier: {$dnNumber} dari {$supplierName}. " .
+                                   "Produk: {$productList}.",
+                    referenceType: 'supplier_delivery_note',
+                    referenceId:   $dnId,
+                    meta: [
+                        'supplier_name'           => $supplierName,
+                        'delivery_note_number'    => $dnNumber,
+                        'customer_po_number'      => $customerPoNumber,
+                        'total_items'             => $totalItems,
+                        'total_quantity'          => $totalQty,
+                        'received_datetime'       => $deliveryNote->received_datetime?->toIso8601String(),
+                        'receiver_name'           => $deliveryNote->receiver_name,
+                    ]
+                );
+            }
+
+            // ── B: Notify semua user aktif di company (tim gudang & finance) ──
+            // Kirim ke semua role — sesuaikan role_id jika hanya ingin ke role tertentu
+            // Contoh: hanya role_id 1 (admin) dan 2 (gudang) → roleIds: [1, 2]
+            $companyUserIds = \App\Models\User::where('default_company_id', $companyId)
+                ->where('is_active', 1)
+                ->whereNotIn('user_id', array_filter($recipientIds)) // hindari duplikat
+                ->pluck('user_id')
+                ->toArray();
+
+            if (!empty($companyUserIds)) {
+                NotificationService::sendToMany(
+                    userIds:       $companyUserIds,
+                    type:          'goods_received',
+                    title:         '📦 Barang Masuk — ' . $dnNumber,
+                    message:       "Barang dari {$supplierName} telah diterima via {$dnNumber}. " .
+                                   "{$totalItems} jenis produk, total {$totalQty} unit. " .
+                                   "Penerima: {$deliveryNote->receiver_name}.",
+                    referenceType: 'supplier_delivery_note',
+                    referenceId:   $dnId,
+                    meta: [
+                        'supplier_name'        => $supplierName,
+                        'delivery_note_number' => $dnNumber,
+                        'total_items'          => $totalItems,
+                        'total_quantity'       => $totalQty,
+                        'received_datetime'    => $deliveryNote->received_datetime?->toIso8601String(),
+                        'receiver_name'        => $deliveryNote->receiver_name,
+                        'products'             => $deliveryNote->items->map(fn($i) => [
+                            'product_name' => $i->product?->product_name,
+                            'quantity'     => $i->quantity,
+                            'unit'         => $i->product?->unit ?? 'pcs',
+                        ])->toArray(),
+                    ]
+                );
+            }
+
+            Log::info("[GoodsReceived] Notifikasi dikirim. DN: {$dnNumber}, penerima: " .
+                      (count($recipientIds) + count($companyUserIds)) . " user.");
+
+        } catch (\Exception $e) {
+            // Jangan throw — notifikasi gagal tidak boleh batalkan penerimaan barang
+            Log::error("[GoodsReceived] Gagal kirim notifikasi: " . $e->getMessage());
+        }
+    }
+
+    private function resolveCustomerPoCreatedBy(SupplierDeliveryNote $deliveryNote): ?int
+    {
+        if (!$deliveryNote->supplier_po_id) return null;
+
+        $supplierPo = \App\Models\SupplierPurchaseOrder::select('po_id')
+            ->find($deliveryNote->supplier_po_id);
+
+        if (!$supplierPo?->po_id) return null;
+
+        $customerPo = \App\Models\PurchaseOrder::select('created_by')
+            ->find($supplierPo->po_id);
+
+        return $customerPo?->created_by;
+    }
+
+    /**
+     * Cari nomor PO customer untuk isi pesan notifikasi.
+     */
+    private function resolveCustomerPoNumber(SupplierDeliveryNote $deliveryNote): string
+    {
+        if (!$deliveryNote->supplier_po_id) return '-';
+
+        $supplierPo = \App\Models\SupplierPurchaseOrder::select('po_id')
+            ->find($deliveryNote->supplier_po_id);
+
+        if (!$supplierPo?->po_id) return '-';
+
+        $customerPo = \App\Models\PurchaseOrder::select('po_number')
+            ->find($supplierPo->po_id);
+
+        return $customerPo?->po_number ?? '-';
+    }
+
 
     /**
      * Create draft invoice from delivery note

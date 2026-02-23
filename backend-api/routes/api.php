@@ -200,11 +200,14 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
 
-    Route::prefix('internal-notifications')->middleware(['auth:sanctum'])->group(function () {
-        Route::get('/', [InternalNotificationController::class, 'index']);
-        Route::post('/mark-all-read', [InternalNotificationController::class, 'markAllAsRead']);
-        Route::post('/{notification}/read', [InternalNotificationController::class, 'markAsRead']);
+      Route::prefix('notifications')->group(function () {
+        Route::get('/',             [InternalNotificationController::class, 'index']);
+        Route::get('/unread-count', [InternalNotificationController::class, 'unreadCount']);
+        Route::patch('/read-all',   [InternalNotificationController::class, 'markAllRead']);
+        Route::patch('/{id}/read',  [InternalNotificationController::class, 'markRead']);
+        Route::delete('/{id}',      [InternalNotificationController::class, 'destroy']);
     });
+
 
     Route::prefix('tender-projects')
         ->middleware('auth:sanctum')

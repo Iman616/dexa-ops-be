@@ -25,7 +25,7 @@ public function handleStockShortage(
     int $companyId,
     bool $autoCreate = false,
     string $strategy = 'last',
-    array $manualSuppliers = []  // ← TAMBAH parameter
+    array $manualSuppliers = []  
 ): array {
     $po->loadMissing('items');
 

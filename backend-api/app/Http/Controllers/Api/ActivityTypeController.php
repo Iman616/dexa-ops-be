@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\ActivityType;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+
 use Illuminate\Support\Facades\Validator;
 
 class ActivityTypeController extends Controller
@@ -12,50 +14,68 @@ class ActivityTypeController extends Controller
     /**
      * Get all active activity types
      */
-    public function index(Request $request)
+public function index(Request $request)
     {
-        $query = ActivityType::query();
+        /** @var \App\Models\User $user */
+        $user   = Auth::user();
+        $roleId = (int) $user->role_id;
 
-        // Filter active only by default
-        if ($request->get('include_inactive') !== 'true') {
-            $query->active();
-        }
+        $types = ActivityType::active()
+            ->forRole($roleId)
+            ->orderBy('type_code')
+            ->orderBy('type_name')
+            ->get(['activity_type_id', 'type_name', 'type_code', 'description']);
 
-        // Search
-        if ($request->has('search')) {
-            $search = $request->get('search');
-            $query->where(function($q) use ($search) {
-                $q->where('type_name', 'like', "%{$search}%")
-                  ->orWhere('type_code', 'like', "%{$search}%");
-            });
-        }
-
-        $activityTypes = $query->orderBy('type_name', 'asc')->get();
+        // ✅ Grouping untuk frontend (opsional, berguna untuk dropdown dengan section)
+        $grouped = $types->groupBy('type_code')->map(fn($items, $code) => [
+            'group_label' => self::groupLabel($code),
+            'type_code'   => $code,
+            'items'       => $items->values(),
+        ])->values();
 
         return response()->json([
-            'success' => true,
-            'data' => $activityTypes
+            'success'     => true,
+            'data'        => $types,          // flat list — untuk select biasa
+            'grouped'     => $grouped,         // grouped — untuk select dengan section headers
+            'user_role'   => [
+                'role_id'      => $roleId,
+                'can_see_tender' => ActivityType::isTenderRole($roleId),
+                'can_see_retail' => ActivityType::isRetailRole($roleId),
+            ],
         ]);
     }
+
 
     /**
      * Get single activity type
      */
-    public function show($id)
+   public function show($id)
     {
-        $activityType = ActivityType::find($id);
+        $user   = Auth::user();
+        $roleId = (int) $user->role_id;
 
-        if (!$activityType) {
+        $type = ActivityType::active()
+            ->forRole($roleId)
+            ->find($id);
+
+        if (!$type) {
             return response()->json([
                 'success' => false,
-                'message' => 'Activity type not found'
+                'message' => 'Activity type not found or not accessible',
             ], 404);
         }
 
-        return response()->json([
-            'success' => true,
-            'data' => $activityType
-        ]);
+        return response()->json(['success' => true, 'data' => $type]);
+    }
+
+       private static function groupLabel(string $typeCode): string
+    {
+        return match ($typeCode) {
+            'TENDER'      => '🏛️ Tender & Pengadaan',
+            'RETAIL'      => '🏪 Retail / Offline',
+            'ONLINE_SHOP' => '🛒 Online Shop',
+            default       => $typeCode,
+        };
     }
 
     /**

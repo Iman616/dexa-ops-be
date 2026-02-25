@@ -287,23 +287,27 @@ class DashboardController extends Controller
             }
 
             /* ---- MASTER DATA (role: 1, 2) ---- */
-            if ($this->hasMenuAccess($roleId, 'products')) {
+           if ($this->hasMenuAccess($roleId, 'products')) {
+                $totalProducts = DB::table('products')->count();
                 $data['products'] = [
-                    'total'  => DB::table('products')->count(),
-                    'active' => DB::table('products')->where('is_active', 1)->count(),
+                    'total'  => $totalProducts,
+                    // ✅ products tidak punya kolom is_active → pakai total sebagai active
+                    'active' => $totalProducts,
                 ];
             }
 
             if ($this->hasMenuAccess($roleId, 'customers')) {
                 $data['customers'] = [
-                    'total'  => DB::table('customers')->count(),
+                    'total' => DB::table('customers')->count(),
                 ];
             }
 
             if ($this->hasMenuAccess($roleId, 'suppliers')) {
+                $totalSuppliers = DB::table('suppliers')->count();
                 $data['suppliers'] = [
-                    'total'  => DB::table('suppliers')->count(),
-                    'active' => DB::table('suppliers')->where('is_active', 1)->count(),
+                    'total'  => $totalSuppliers,
+                    // ✅ suppliers tidak punya kolom is_active → pakai total sebagai active
+                    'active' => $totalSuppliers,
                 ];
             }
 
@@ -659,6 +663,422 @@ class DashboardController extends Controller
                 'message' => 'Failed to fetch expiry alerts',
                 'error'   => $e->getMessage(),
             ], 500);
+        }
+    }
+  /* =========================================================
+     * GET /api/dashboard/omset-margin
+     *
+     * Omset = invoices.subtotal (before tax) — bisa switch ke total_amount
+     * HPP   = stock_out.quantity × stock_batches.purchase_price (aktual per batch)
+     * Margin = Omset - HPP
+     *
+     * Query params:
+     *   - period: 'this_month' | 'last_month' | 'this_year' | custom (default: this_month)
+     *   - start_date: Y-m-d  (jika period=custom)
+     *   - end_date:   Y-m-d  (jika period=custom)
+     * ========================================================= */
+    public function getOmsetMargin(Request $request)
+    {
+        try {
+            $user      = $request->user();
+            $roleId    = (int) $user->role_id;
+            $companyId = $this->getCompanyId($request);
+
+            if (!$this->hasMenuAccess($roleId, 'invoices') && !$this->hasMenuAccess($roleId, 'financial-report')) {
+                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
+            }
+
+            // ── Tentukan rentang tanggal ──────────────────────────────────
+            [$startDate, $endDate] = $this->resolveDateRange($request);
+
+            // ── OMSET dari invoices (subtotal = before tax) ───────────────
+            $omsetRow = DB::table('invoices')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
+                ->whereBetween('invoice_date', [$startDate, $endDate])
+                ->selectRaw('
+                    COUNT(*)                        AS total_invoices,
+                    COALESCE(SUM(subtotal), 0)      AS omset,
+                    COALESCE(SUM(tax_amount), 0)    AS total_ppn,
+                    COALESCE(SUM(total_amount), 0)  AS omset_with_tax,
+                    COALESCE(SUM(CASE WHEN payment_status = "paid" THEN total_amount ELSE 0 END), 0) AS omset_paid,
+                    COALESCE(SUM(CASE WHEN payment_status = "unpaid" THEN total_amount ELSE 0 END), 0) AS omset_unpaid
+                ')
+                ->first();
+
+            // ── HPP dari stock_out × purchase_price batch ─────────────────
+            // Difilter by out_date (tanggal barang keluar = tanggal delivery)
+            $hppRow = DB::table('stock_out as so')
+                ->join('stock_batches as sb', 'sb.batch_id', '=', 'so.batch_id')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
+                ->where('so.transaction_type', 'sale')  // hanya transaksi penjualan
+                ->whereBetween('so.out_date', [$startDate, $endDate])
+                ->selectRaw('
+                    COALESCE(SUM(so.quantity * sb.purchase_price), 0)  AS hpp,
+                    COALESCE(SUM(so.quantity * so.selling_price), 0)   AS pendapatan_stock_out,
+                    COUNT(*)                                            AS total_stock_out
+                ')
+                ->first();
+
+            $omset         = (float) $omsetRow->omset;
+            $hpp           = (float) $hppRow->hpp;
+            $margin        = $omset - $hpp;
+            $marginPercent = $omset > 0 ? round(($margin / $omset) * 100, 2) : 0;
+
+            // ── Pembanding bulan sebelumnya ───────────────────────────────
+            $prevStart = \Carbon\Carbon::parse($startDate)->subMonth()->startOfMonth()->toDateString();
+            $prevEnd   = \Carbon\Carbon::parse($startDate)->subMonth()->endOfMonth()->toDateString();
+
+            $prevOmset = (float) DB::table('invoices')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
+                ->whereBetween('invoice_date', [$prevStart, $prevEnd])
+                ->sum('subtotal');
+
+            $prevHpp = (float) DB::table('stock_out as so')
+                ->join('stock_batches as sb', 'sb.batch_id', '=', 'so.batch_id')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
+                ->where('so.transaction_type', 'sale')
+                ->whereBetween('so.out_date', [$prevStart, $prevEnd])
+                ->sum(DB::raw('so.quantity * sb.purchase_price'));
+
+            $prevMargin = $prevOmset - $prevHpp;
+
+            return response()->json([
+                'success' => true,
+                'period'  => ['start' => $startDate, 'end' => $endDate],
+                'data'    => [
+                    // ── Omset ──────────────────────────────────
+                    'omset'              => $omset,                       // sebelum PPN
+                    'omset_with_tax'     => (float) $omsetRow->omset_with_tax,
+                    'total_ppn'          => (float) $omsetRow->total_ppn,
+                    'omset_paid'         => (float) $omsetRow->omset_paid,
+                    'omset_unpaid'       => (float) $omsetRow->omset_unpaid,
+                    'total_invoices'     => (int) $omsetRow->total_invoices,
+
+                    // ── HPP & Margin ───────────────────────────
+                    'hpp'                => $hpp,
+                    'margin'             => $margin,
+                    'margin_percent'     => $marginPercent,
+                    'total_stock_out'    => (int) $hppRow->total_stock_out,
+
+                    // ── Perbandingan bulan sebelumnya ──────────
+                    'prev_omset'         => $prevOmset,
+                    'prev_hpp'           => $prevHpp,
+                    'prev_margin'        => $prevMargin,
+                    'omset_growth'       => $prevOmset > 0
+                        ? round((($omset - $prevOmset) / $prevOmset) * 100, 2) : 0,
+                    'margin_growth'      => $prevMargin > 0
+                        ? round((($margin - $prevMargin) / $prevMargin) * 100, 2) : 0,
+                ],
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch omset & margin',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /* =========================================================
+     * GET /api/dashboard/omset-by-type
+     *
+     * Breakdown omset + margin per type_code (TENDER / RETAIL / ONLINE_SHOP)
+     * Join: invoices → purchase_orders → activity_types
+     *
+     * Query params: period, start_date, end_date (sama seperti omset-margin)
+     * ========================================================= */
+    public function getOmsetByTypeCode(Request $request)
+    {
+        try {
+            $user      = $request->user();
+            $roleId    = (int) $user->role_id;
+            $companyId = $this->getCompanyId($request);
+
+            if (!$this->hasMenuAccess($roleId, 'invoices') && !$this->hasMenuAccess($roleId, 'financial-report')) {
+                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
+            }
+
+            [$startDate, $endDate] = $this->resolveDateRange($request);
+
+            // ── Omset per type_code ────────────────────────────────────────
+            // Invoice yang punya PO + activity_type
+            $omsetByType = DB::table('invoices as i')
+                ->join('purchase_orders as po', 'po.po_id', '=', 'i.po_id')
+                ->join('activity_types as at', 'at.activity_type_id', '=', 'po.activity_type_id')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
+                ->whereBetween('i.invoice_date', [$startDate, $endDate])
+                ->selectRaw('
+                    at.type_code,
+                    at.type_name,
+                    COUNT(i.invoice_id)             AS total_invoices,
+                    COALESCE(SUM(i.subtotal), 0)    AS omset,
+                    COALESCE(SUM(i.total_amount), 0) AS omset_with_tax
+                ')
+                ->groupBy('at.type_code', 'at.type_name')
+                ->get()
+                ->keyBy('type_code');
+
+            // ── Invoice tanpa PO / tanpa activity_type ────────────────────
+            $omsetNoType = DB::table('invoices as i')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
+                ->whereBetween('i.invoice_date', [$startDate, $endDate])
+                ->where(function ($q) {
+                    $q->whereNull('i.po_id')
+                      ->orWhereNotExists(function ($sub) {
+                          $sub->from('purchase_orders as po')
+                              ->join('activity_types as at', 'at.activity_type_id', '=', 'po.activity_type_id')
+                              ->whereColumn('po.po_id', 'i.po_id');
+                      });
+                })
+                ->selectRaw('
+                    COUNT(invoice_id)             AS total_invoices,
+                    COALESCE(SUM(subtotal), 0)    AS omset,
+                    COALESCE(SUM(total_amount), 0) AS omset_with_tax
+                ')
+                ->first();
+
+            // ── HPP per type_code via delivery_notes ──────────────────────
+            // stock_out → delivery_note → invoice → po → activity_type
+            $hppByType = DB::table('stock_out as so')
+                ->join('stock_batches as sb',      'sb.batch_id',      '=', 'so.batch_id')
+                ->join('delivery_notes as dn',     'dn.delivery_note_id', '=', 'so.delivery_note_id')
+                ->join('invoices as i',            'i.invoice_id',     '=', 'dn.invoice_id')
+                ->join('purchase_orders as po',    'po.po_id',         '=', 'i.po_id')
+                ->join('activity_types as at',     'at.activity_type_id', '=', 'po.activity_type_id')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
+                ->where('so.transaction_type', 'sale')
+                ->whereBetween('so.out_date', [$startDate, $endDate])
+                ->selectRaw('
+                    at.type_code,
+                    COALESCE(SUM(so.quantity * sb.purchase_price), 0) AS hpp
+                ')
+                ->groupBy('at.type_code')
+                ->get()
+                ->keyBy('type_code');
+
+            // ── Gabungkan hasil ───────────────────────────────────────────
+            $allTypeCodes = ['TENDER', 'RETAIL', 'ONLINE_SHOP'];
+            $result       = [];
+            $grandOmset   = 0;
+            $grandMargin  = 0;
+
+            foreach ($allTypeCodes as $code) {
+                $omset   = (float) ($omsetByType[$code]->omset ?? 0);
+                $hpp     = (float) ($hppByType[$code]->hpp    ?? 0);
+                $margin  = $omset - $hpp;
+                $grandOmset  += $omset;
+                $grandMargin += $margin;
+
+                $result[] = [
+                    'type_code'      => $code,
+                    'type_name'      => $omsetByType[$code]->type_name ?? $code,
+                    'total_invoices' => (int) ($omsetByType[$code]->total_invoices ?? 0),
+                    'omset'          => $omset,
+                    'omset_with_tax' => (float) ($omsetByType[$code]->omset_with_tax ?? 0),
+                    'hpp'            => $hpp,
+                    'margin'         => $margin,
+                    'margin_percent' => $omset > 0 ? round(($margin / $omset) * 100, 2) : 0,
+                ];
+            }
+
+            // Tambah "Lainnya" (invoice tanpa type / tanpa PO)
+            $omsetLain  = (float) $omsetNoType->omset;
+            $result[] = [
+                'type_code'      => 'OTHER',
+                'type_name'      => 'Lainnya',
+                'total_invoices' => (int) $omsetNoType->total_invoices,
+                'omset'          => $omsetLain,
+                'omset_with_tax' => (float) $omsetNoType->omset_with_tax,
+                'hpp'            => 0,   // tidak bisa trace HPP tanpa delivery note
+                'margin'         => $omsetLain,
+                'margin_percent' => 100,
+            ];
+
+            // Hitung persentase kontribusi tiap type dari grand total
+            $grandOmset = max($grandOmset + $omsetLain, 1); // hindari div/0
+            foreach ($result as &$row) {
+                $row['omset_share'] = round(($row['omset'] / $grandOmset) * 100, 2);
+            }
+            unset($row);
+
+            return response()->json([
+                'success' => true,
+                'period'  => ['start' => $startDate, 'end' => $endDate],
+                'summary' => [
+                    'grand_omset'  => $grandOmset,
+                    'grand_margin' => $grandMargin + $omsetLain,
+                ],
+                'data'    => $result,
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch omset by type code',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /* =========================================================
+     * GET /api/dashboard/monthly-margin
+     *
+     * Tren omset + margin per bulan (untuk chart)
+     * Query params:
+     *   - months: jumlah bulan ke belakang (default: 6, max: 24)
+     *   - type_code: TENDER | RETAIL | ONLINE_SHOP | ALL (default: ALL)
+     * ========================================================= */
+public function getMonthlyMargin(Request $request)
+    {
+        try {
+            $user      = $request->user();
+            $roleId    = (int) $user->role_id;
+            $companyId = $this->getCompanyId($request);
+            $typeCode  = $request->input('type_code'); // null = semua
+
+            if (!$this->hasMenuAccess($roleId, 'invoices') && !$this->hasMenuAccess($roleId, 'financial-report')) {
+                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
+            }
+
+            // ✅ Gunakan period yang sama dengan endpoint lain
+            // → "Tahun Ini" = Jan-Des 2026, bukan mundur N bulan dari sekarang
+            [$startDate, $endDate] = $this->resolveDateRange($request);
+            $startCarbon = \Carbon\Carbon::parse($startDate)->startOfMonth();
+            $endCarbon   = \Carbon\Carbon::parse($endDate)->endOfMonth();
+
+            // ── Omset per bulan ────────────────────────────────────────────
+            $omsetQuery = DB::table('invoices as i')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
+                ->whereBetween('i.invoice_date', [
+                    $startCarbon->toDateString(),
+                    $endCarbon->toDateString(),
+                ]);
+
+            if ($typeCode) {
+                // Filter by type_code — wajib ada PO + activity_type
+                $omsetQuery
+                    ->join('purchase_orders as po', 'po.po_id', '=', 'i.po_id')
+                    ->join('activity_types as at',  'at.activity_type_id', '=', 'po.activity_type_id')
+                    ->where('at.type_code', $typeCode);
+            }
+
+            $omsetRaw = $omsetQuery
+                ->selectRaw('
+                    YEAR(i.invoice_date)         AS year,
+                    MONTH(i.invoice_date)        AS month,
+                    COALESCE(SUM(i.subtotal), 0) AS omset,
+                    COUNT(i.invoice_id)          AS invoice_count
+                ')
+                ->groupByRaw('YEAR(i.invoice_date), MONTH(i.invoice_date)')
+                ->get()
+                ->keyBy(fn($r) => "{$r->year}-{$r->month}");
+
+            // ── HPP per bulan ──────────────────────────────────────────────
+            $hppQuery = DB::table('stock_out as so')
+                ->join('stock_batches as sb', 'sb.batch_id', '=', 'so.batch_id')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
+                ->where('so.transaction_type', 'sale')
+                ->whereBetween('so.out_date', [
+                    $startCarbon->toDateString(),
+                    $endCarbon->toDateString(),
+                ]);
+
+            if ($typeCode) {
+                $hppQuery
+                    ->join('delivery_notes as dn', 'dn.delivery_note_id', '=', 'so.delivery_note_id')
+                    ->join('invoices as i',         'i.invoice_id',       '=', 'dn.invoice_id')
+                    ->join('purchase_orders as po', 'po.po_id',           '=', 'i.po_id')
+                    ->join('activity_types as at',  'at.activity_type_id', '=', 'po.activity_type_id')
+                    ->where('at.type_code', $typeCode);
+            }
+
+            $hppRaw = $hppQuery
+                ->selectRaw('
+                    YEAR(so.out_date)                                       AS year,
+                    MONTH(so.out_date)                                      AS month,
+                    COALESCE(SUM(so.quantity * sb.purchase_price), 0)      AS hpp
+                ')
+                ->groupByRaw('YEAR(so.out_date), MONTH(so.out_date)')
+                ->get()
+                ->keyBy(fn($r) => "{$r->year}-{$r->month}");
+
+            // ── Bangun array bulan dari startDate → endDate ───────────────
+            // ✅ Iterasi bulan per bulan sesuai rentang period, bukan mundur dari sekarang
+            $result  = [];
+            $current = $startCarbon->copy();
+
+            while ($current->lte($endCarbon)) {
+                $key    = "{$current->year}-{$current->month}";
+                $omset  = (float) ($omsetRaw[$key]->omset ?? 0);
+                $hpp    = (float) ($hppRaw[$key]->hpp     ?? 0);
+                $margin = $omset - $hpp;
+
+                $result[] = [
+                    'year'           => $current->year,
+                    'month'          => str_pad($current->month, 2, '0', STR_PAD_LEFT),
+                    'label'          => $current->translatedFormat('M Y'),
+                    'omset'          => $omset,
+                    'hpp'            => $hpp,
+                    'margin'         => $margin,
+                    'margin_percent' => $omset > 0 ? round(($margin / $omset) * 100, 2) : 0,
+                    'invoice_count'  => (int) ($omsetRaw[$key]->invoice_count ?? 0),
+                ];
+
+                $current->addMonth();
+            }
+
+            return response()->json([
+                'success'   => true,
+                'type_code' => $typeCode ?? 'ALL',
+                'period'    => ['start' => $startDate, 'end' => $endDate],
+                'data'      => $result,
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch monthly margin',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /* =========================================================
+     * PRIVATE HELPER: resolveDateRange
+     * Mengonversi query param 'period' ke [startDate, endDate]
+     * ========================================================= */
+    private function resolveDateRange(Request $request): array
+    {
+        $period = $request->input('period', 'this_month');
+
+        switch ($period) {
+            case 'last_month':
+                return [
+                    \Carbon\Carbon::now()->subMonth()->startOfMonth()->toDateString(),
+                    \Carbon\Carbon::now()->subMonth()->endOfMonth()->toDateString(),
+                ];
+            case 'this_year':
+                return [
+                    \Carbon\Carbon::now()->startOfYear()->toDateString(),
+                    \Carbon\Carbon::now()->endOfYear()->toDateString(),
+                ];
+            case 'last_year':
+                return [
+                    \Carbon\Carbon::now()->subYear()->startOfYear()->toDateString(),
+                    \Carbon\Carbon::now()->subYear()->endOfYear()->toDateString(),
+                ];
+            case 'custom':
+                return [
+                    $request->input('start_date', \Carbon\Carbon::now()->startOfMonth()->toDateString()),
+                    $request->input('end_date',   \Carbon\Carbon::now()->toDateString()),
+                ];
+            case 'this_month':
+            default:
+                return [
+                    \Carbon\Carbon::now()->startOfMonth()->toDateString(),
+                    \Carbon\Carbon::now()->toDateString(),
+                ];
         }
     }
 }

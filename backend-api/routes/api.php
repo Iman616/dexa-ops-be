@@ -194,8 +194,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('top-customers',       [DashboardController::class, 'getTopCustomers']);
         Route::get('payment-methods',     [DashboardController::class, 'getPaymentMethodStats']);
         Route::get('expiry-alerts',       [DashboardController::class, 'getExpiryAlerts']);
-        Route::get('stock-summary',       [DashboardController::class, 'getStockSummary']);  // ✅ NEW
-        Route::get('tender-summary',      [DashboardController::class, 'getTenderSummary']); // ✅ NEW
+        Route::get('stock-summary',       [DashboardController::class, 'getStockSummary']);  
+        Route::get('tender-summary',      [DashboardController::class, 'getTenderSummary']); 
+        Route::get('omset-margin',   [DashboardController::class, 'getOmsetMargin']);
+        Route::get('omset-by-type',  [DashboardController::class, 'getOmsetByTypeCode']);
+        Route::get('monthly-margin', [DashboardController::class, 'getMonthlyMargin']);
     });
 
 

@@ -56,7 +56,7 @@ class DashboardController extends Controller
     /* =========================================================
      * GET /api/dashboard/stats
      * ========================================================= */
-    public function getStats(Request $request)
+   public function getStats(Request $request)
     {
         try {
             $user      = $request->user();
@@ -65,234 +65,102 @@ class DashboardController extends Controller
 
             $data = [];
 
-            /* ---- SALES (role: 1=SuperAdmin, 2=Admin, 3=SalesMarketing, 6=Finance) ---- */
-            if ($this->hasMenuAccess($roleId, 'invoices')) {
-                $invoiceBase = DB::table('invoices')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
-
-                $data['invoices'] = [
-                    'total'   => (clone $invoiceBase)->count(),
-                    'total_amount' => (clone $invoiceBase)->sum('total_amount'),
-                    'paid'    => (clone $invoiceBase)->where('payment_status', 'paid')->count(),
-                    'paid_amount' => (clone $invoiceBase)->where('payment_status', 'paid')->sum('total_amount'),
-                    'unpaid'  => (clone $invoiceBase)->where('payment_status', 'unpaid')->count(),
-                    'unpaid_amount' => (clone $invoiceBase)->where('payment_status', 'unpaid')->sum('total_amount'),
-                    'overdue' => (clone $invoiceBase)
-                        ->where('payment_status', 'unpaid')
-                        ->where('due_date', '<', now()->toDateString())
-                        ->count(),
-                    'overdue_amount' => (clone $invoiceBase)
-                        ->where('payment_status', 'unpaid')
-                        ->where('due_date', '<', now()->toDateString())
-                        ->sum('total_amount'),
-                ];
-            }
-
+            /* ---- SALES ---- */
             if ($this->hasMenuAccess($roleId, 'quotations')) {
-                $quotBase = DB::table('quotations')
+                $qBase = DB::table('quotations')
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
 
                 $data['quotations'] = [
-                    'total'    => (clone $quotBase)->count(),
-                    'draft'    => (clone $quotBase)->where('status', 'draft')->count(),
-                    'sent'     => (clone $quotBase)->where('status', 'sent')->count(),
-                    'approved' => (clone $quotBase)->where('status', 'approved')->count(),
-                    'total_amount' => (clone $quotBase)->sum('total_amount'),
+                    'total'   => (clone $qBase)->count(),
+                    'draft'   => (clone $qBase)->where('status', 'draft')->count(),
+                    'sent'    => (clone $qBase)->where('status', 'sent')->count(),
+                    'approved'=> (clone $qBase)->where('status', 'approved')->count(),
                 ];
             }
 
-            if ($this->hasMenuAccess($roleId, 'purchase-orders')) {
+            if ($this->hasMenuAccess($roleId, 'purchase_orders')) {
                 $poBase = DB::table('purchase_orders')
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
 
                 $data['purchase_orders'] = [
                     'total'      => (clone $poBase)->count(),
-                    'draft'      => (clone $poBase)->where('status', 'draft')->count(),
                     'processing' => (clone $poBase)->where('status', 'processing')->count(),
                     'completed'  => (clone $poBase)->where('status', 'completed')->count(),
-                    'total_amount' => (clone $poBase)->sum('total_amount'),
+                    'pending'    => (clone $poBase)->whereIn('status', ['draft', 'issued', 'sent'])->count(),
                 ];
             }
 
-            if ($this->hasMenuAccess($roleId, 'proforma-invoices')) {
-                $pfBase = DB::table('proforma_invoices')
+            /* ---- FINANCE ---- */
+            if ($this->hasMenuAccess($roleId, 'invoices')) {
+                $invBase = DB::table('invoices')
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
 
-                $data['proforma_invoices'] = [
-                    'total'    => (clone $pfBase)->count(),
-                    'draft'    => (clone $pfBase)->where('status', 'draft')->count(),
-                    'approved' => (clone $pfBase)->where('status', 'approved')->count(),
-                    'total_amount' => (clone $pfBase)->sum('total_amount'),
-                ];
-            }
-
-            if ($this->hasMenuAccess($roleId, 'delivery-notes')) {
-                $dnBase = DB::table('delivery_notes')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
-
-                $data['delivery_notes'] = [
-                    'total'  => (clone $dnBase)->count(),
-                    'draft'  => (clone $dnBase)->where('status', 'draft')->count(),
-                    'issued' => (clone $dnBase)->where('status', 'issued')->count(),
-                ];
-            }
-
-            /* ---- PURCHASING (role: 1, 2, 4=Purchasing) ---- */
-            if ($this->hasMenuAccess($roleId, 'supplier-po')) {
-                $spoBase = DB::table('supplier_purchase_orders')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
-
-                $data['supplier_purchase_orders'] = [
-                    'total'      => (clone $spoBase)->count(),
-                    'draft'      => (clone $spoBase)->where('status', 'draft')->count(),
-                    'ordered'    => (clone $spoBase)->where('status', 'ordered')->count(),
-                    'partial'    => (clone $spoBase)->where('status', 'partial')->count(),
-                    'completed'  => (clone $spoBase)->where('status', 'completed')->count(),
-                    'total_amount' => (clone $spoBase)->sum('total_amount'),
-                ];
-            }
-
-            if ($this->hasMenuAccess($roleId, 'supplier-invoices')) {
-                $siBase = DB::table('supplier_invoices')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
-
-                $data['supplier_invoices'] = [
-                    'total'        => (clone $siBase)->count(),
-                    'unpaid'       => (clone $siBase)->where('payment_status', 'unpaid')->count(),
-                    'unpaid_amount'=> (clone $siBase)->where('payment_status', 'unpaid')->sum('total_amount'),
-                    'paid'         => (clone $siBase)->where('payment_status', 'paid')->count(),
-                    'overdue'      => (clone $siBase)
-                        ->where('payment_status', 'unpaid')
+                $data['invoices'] = [
+                    'total'          => (clone $invBase)->count(),
+                    'unpaid'         => (clone $invBase)->where('payment_status', 'unpaid')->count(),
+                    'paid'           => (clone $invBase)->where('payment_status', 'paid')->count(),
+                    'unpaid_amount'  => (clone $invBase)->where('payment_status', 'unpaid')->sum('total_amount'),
+                    'overdue'        => (clone $invBase)
+                        ->where('payment_status', '!=', 'paid')
                         ->where('due_date', '<', now()->toDateString())
                         ->count(),
                 ];
             }
 
-            if ($this->hasMenuAccess($roleId, 'supplier-delivery-notes')) {
-                $sdnBase = DB::table('supplier_delivery_notes')
+            /* ---- PURCHASING ---- */
+            if ($this->hasMenuAccess($roleId, 'supplier_po')) {
+                $spoBase = DB::table('supplier_purchase_orders')
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
 
-                $data['supplier_delivery_notes'] = [
-                    'total'    => (clone $sdnBase)->count(),
-                    'pending'  => (clone $sdnBase)->where('status', 'pending')->count(),
-                    'received' => (clone $sdnBase)->where('status', 'received')->count(),
+                $data['supplier_po'] = [
+                    'total'    => (clone $spoBase)->count(),
+                    'pending'  => (clone $spoBase)->whereIn('status', ['draft', 'issued'])->count(),
+                    'completed'=> (clone $spoBase)->where('status', 'completed')->count(),
                 ];
             }
 
-            /* ---- WAREHOUSE (role: 1, 2, 5=Warehouse) ---- */
-            if ($this->hasMenuAccess($roleId, 'stock-in')) {
-                $siBase = DB::table('stock_in')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
+            if ($this->hasMenuAccess($roleId, 'supplier_invoices')) {
+                // ✅ Nama tabel di schema: supplierinvoices (tanpa underscore)
+                $siBase = DB::table('supplierinvoices')
+                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('supplier_id', function($sub) use ($companyId) {
+                        // supplierinvoices tidak punya company_id langsung
+                        // filter via supplier_po → company_id
+                        $sub->select('supplier_id')
+                            ->from('supplier_purchase_orders')
+                            ->where('company_id', $companyId);
+                    }));
 
-                $data['stock_in'] = [
-                    'total_records'   => (clone $siBase)->count(),
-                    'total_qty'       => (clone $siBase)->sum('quantity'),
-                    'this_month'      => (clone $siBase)
-                        ->whereMonth('received_datetime', now()->month)
-                        ->whereYear('received_datetime', now()->year)
-                        ->count(),
+                $data['supplier_invoices'] = [
+                    'total'         => (clone $siBase)->count(),
+                    'unpaid'        => (clone $siBase)->where('payment_status', 'unpaid')->count(),
+                    'unpaid_amount' => (clone $siBase)->where('payment_status', 'unpaid')->sum('total_amount'),
+                    'paid'          => (clone $siBase)->where('payment_status', 'paid')->count(),
                 ];
             }
 
-            if ($this->hasMenuAccess($roleId, 'stock-out')) {
-                $soBase = DB::table('stock_out')
+            /* ---- WAREHOUSE ---- */
+            if ($this->hasMenuAccess($roleId, 'stock_batches')) {
+                $sbBase = DB::table('stock_batches')
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
-
-                $data['stock_out'] = [
-                    'total_records' => (clone $soBase)->count(),
-                    'total_qty'     => (clone $soBase)->sum('quantity'),
-                    'this_month'    => (clone $soBase)
-                        ->whereMonth('created_at', now()->month)
-                        ->whereYear('created_at', now()->year)
-                        ->count(),
-                ];
-            }
-
-            if ($this->hasMenuAccess($roleId, 'stock-batches')) {
-                $batchBase = DB::table('stock_batches')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
-
-                // Expiry alerts
-                $expiryAlertCount = DB::table('expiry_alerts as ea')
-                    ->join('stock_batches as sb', 'sb.batch_id', '=', 'ea.batch_id')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('sb.company_id', $companyId))
-                    ->where('ea.status', 'pending')
-                    ->count();
 
                 $data['stock_batches'] = [
-                    'total'         => (clone $batchBase)->count(),
-                    'active'        => (clone $batchBase)->where('status', 'active')->count(),
-                    'expired'       => (clone $batchBase)->where('status', 'expired')->count(),
-                    'expiry_alerts' => $expiryAlertCount,
-                    'near_expiry'   => (clone $batchBase)
-                        ->whereNotNull('expiry_date')
-                        ->where('expiry_date', '<=', now()->addDays(30)->toDateString())
-                        ->where('expiry_date', '>=', now()->toDateString())
+                    'total'   => (clone $sbBase)->count(),
+                    'active'  => (clone $sbBase)->where('status', 'active')->count(),
+                    'expiring'=> (clone $sbBase)
                         ->where('status', 'active')
+                        ->where('expiry_date', '<=', now()->addDays(30)->toDateString())
                         ->count(),
+                    'expired' => (clone $sbBase)->where('status', 'expired')->count(),
                 ];
             }
 
-            /* ---- FINANCE (role: 1, 2, 6=Finance) ---- */
-       if ($this->hasMenuAccess($roleId, 'payments')) {
-    $payBase = DB::table('payments')
-        ->join('invoices', 'invoices.invoice_id', '=', 'payments.invoice_id')
-        ->when($roleId !== 1 && $companyId, fn($q) => $q->where('invoices.company_id', $companyId))
-        ->select('payments.*');
-
-    $data['payments'] = [
-        'total'          => (clone $payBase)->count(),
-        // ✅ FIX: payments.status bukan payments.payment_status
-        'success'        => (clone $payBase)->where('payments.status', 'success')->count(),
-        'success_amount' => (clone $payBase)->where('payments.status', 'success')->sum('payments.amount'),
-        'pending'        => (clone $payBase)->where('payments.status', 'pending')->count(),
-    ];
-}
-
-            if ($this->hasMenuAccess($roleId, 'receipts')) {
-                $receiptBase = DB::table('receipts')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
-
-                $data['receipts'] = [
-                    'total'        => (clone $receiptBase)->count(),
-                    'total_amount' => (clone $receiptBase)->sum('amount'),
-                    'this_month'   => (clone $receiptBase)
-                        ->whereMonth('receipt_date', now()->month)
-                        ->whereYear('receipt_date', now()->year)
-                        ->sum('amount'),
-                ];
-            }
-
-            if ($this->hasMenuAccess($roleId, 'tax-invoices')) {
-                $taxBase = DB::table('tax_invoices')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
-
-                $data['tax_invoices'] = [
-                    'total'    => (clone $taxBase)->count(),
-                    'draft'    => (clone $taxBase)->where('status', 'draft')->count(),
-                    'approved' => (clone $taxBase)->where('status', 'approved')->count(),
-                    'submitted'=> (clone $taxBase)->where('status', 'submitted')->count(),
-                ];
-            }
-
-            if ($this->hasMenuAccess($roleId, 'supplier-payments')) {
-                $spBase = DB::table('supplier_payments')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
-
-                $data['supplier_payments'] = [
-                    'total'        => (clone $spBase)->count(),
-                    'paid_amount'  => (clone $spBase)->where('status', 'paid')->sum('amount'),
-                    'pending'      => (clone $spBase)->where('status', 'pending')->count(),
-                ];
-            }
-
-            /* ---- MASTER DATA (role: 1, 2) ---- */
-           if ($this->hasMenuAccess($roleId, 'products')) {
+            /* ---- MASTER DATA ---- */
+            if ($this->hasMenuAccess($roleId, 'products')) {
+                // ✅ FIX: products TIDAK punya kolom is_active
                 $totalProducts = DB::table('products')->count();
                 $data['products'] = [
                     'total'  => $totalProducts,
-                    // ✅ products tidak punya kolom is_active → pakai total sebagai active
-                    'active' => $totalProducts,
+                    'active' => $totalProducts, // no is_active column
                 ];
             }
 
@@ -303,47 +171,27 @@ class DashboardController extends Controller
             }
 
             if ($this->hasMenuAccess($roleId, 'suppliers')) {
+                // ✅ FIX: suppliers TIDAK punya kolom is_active
                 $totalSuppliers = DB::table('suppliers')->count();
                 $data['suppliers'] = [
                     'total'  => $totalSuppliers,
-                    // ✅ suppliers tidak punya kolom is_active → pakai total sebagai active
-                    'active' => $totalSuppliers,
-                ];
-            }
-
-            /* ---- TENDER (role: 1, 2, 7=TenderManager) ---- */
-            if ($this->hasMenuAccess($roleId, 'tender-projects')) {
-                $tenderBase = DB::table('tender_project_details')
-                    ->join('purchase_orders as po', 'po.po_id', '=', 'tender_project_details.po_id')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('po.company_id', $companyId));
-
-                $data['tender_projects'] = [
-                    'total' => (clone $tenderBase)->count(),
-                ];
-            }
-
-            /* ---- SETTINGS (role: 1 only) ---- */
-            if ($roleId === 1) {
-                $data['system'] = [
-                    'total_users'     => DB::table('users')->count(),
-                    'active_users'    => DB::table('users')->where('is_active', 1)->count(),
-                    'total_companies' => DB::table('companies')->count(),
-                    'active_sessions' => DB::table('user_sessions')->where('is_active', true)->count(),
+                    'active' => $totalSuppliers, // no is_active column
                 ];
             }
 
             return response()->json([
-                'success'    => true,
-                'role_id'    => $roleId,
-                'company_id' => $companyId,
-                'data'       => $data,
-            ], 200);
+                'success' => true,
+                'data'    => $data,
+            ]);
 
         } catch (\Exception $e) {
+            \Log::error('Dashboard stats error: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+            ]);
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to fetch dashboard statistics',
-                'error'   => $e->getMessage(),
+                'message' => 'Failed to load stats',
+                'error'   => config('app.debug') ? $e->getMessage() : 'Internal server error',
             ], 500);
         }
     }

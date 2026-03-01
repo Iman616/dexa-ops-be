@@ -17,7 +17,6 @@ class DashboardController extends Controller
     {
         $user = $request->user();
 
-        // Ambil dari session aktif
         $session = DB::table('user_sessions')
             ->where('user_id', $user->user_id)
             ->where('is_active', true)
@@ -56,7 +55,7 @@ class DashboardController extends Controller
     /* =========================================================
      * GET /api/dashboard/stats
      * ========================================================= */
-   public function getStats(Request $request)
+    public function getStats(Request $request)
     {
         try {
             $user      = $request->user();
@@ -71,10 +70,10 @@ class DashboardController extends Controller
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
 
                 $data['quotations'] = [
-                    'total'   => (clone $qBase)->count(),
-                    'draft'   => (clone $qBase)->where('status', 'draft')->count(),
-                    'sent'    => (clone $qBase)->where('status', 'sent')->count(),
-                    'approved'=> (clone $qBase)->where('status', 'approved')->count(),
+                    'total'    => (clone $qBase)->count(),
+                    'draft'    => (clone $qBase)->where('status', 'draft')->count(),
+                    'sent'     => (clone $qBase)->where('status', 'sent')->count(),
+                    'approved' => (clone $qBase)->where('status', 'approved')->count(),
                 ];
             }
 
@@ -83,10 +82,10 @@ class DashboardController extends Controller
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
 
                 $data['purchase_orders'] = [
-                    'total'      => (clone $poBase)->count(),
-                    'processing' => (clone $poBase)->where('status', 'processing')->count(),
-                    'completed'  => (clone $poBase)->where('status', 'completed')->count(),
-                    'pending'    => (clone $poBase)->whereIn('status', ['draft', 'issued', 'sent'])->count(),
+                    'total'       => (clone $poBase)->count(),
+                    'processing'  => (clone $poBase)->where('status', 'processing')->count(),
+                    'completed'   => (clone $poBase)->where('status', 'completed')->count(),
+                    'pending'     => (clone $poBase)->whereIn('status', ['draft', 'issued', 'sent'])->count(),
                 ];
             }
 
@@ -96,11 +95,11 @@ class DashboardController extends Controller
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
 
                 $data['invoices'] = [
-                    'total'          => (clone $invBase)->count(),
-                    'unpaid'         => (clone $invBase)->where('payment_status', 'unpaid')->count(),
-                    'paid'           => (clone $invBase)->where('payment_status', 'paid')->count(),
-                    'unpaid_amount'  => (clone $invBase)->where('payment_status', 'unpaid')->sum('total_amount'),
-                    'overdue'        => (clone $invBase)
+                    'total'         => (clone $invBase)->count(),
+                    'unpaid'        => (clone $invBase)->where('payment_status', 'unpaid')->count(),
+                    'paid'          => (clone $invBase)->where('payment_status', 'paid')->count(),
+                    'unpaid_amount' => (clone $invBase)->where('payment_status', 'unpaid')->sum('total_amount'),
+                    'overdue'       => (clone $invBase)
                         ->where('payment_status', '!=', 'paid')
                         ->where('due_date', '<', now()->toDateString())
                         ->count(),
@@ -113,28 +112,67 @@ class DashboardController extends Controller
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
 
                 $data['supplier_po'] = [
-                    'total'    => (clone $spoBase)->count(),
-                    'pending'  => (clone $spoBase)->whereIn('status', ['draft', 'issued'])->count(),
-                    'completed'=> (clone $spoBase)->where('status', 'completed')->count(),
+                    'total'     => (clone $spoBase)->count(),
+                    'pending'   => (clone $spoBase)->whereIn('status', ['draft', 'issued'])->count(),
+                    'completed' => (clone $spoBase)->where('status', 'completed')->count(),
                 ];
             }
 
             if ($this->hasMenuAccess($roleId, 'supplier_invoices')) {
-                // ✅ Nama tabel di schema: supplierinvoices (tanpa underscore)
-                $siBase = DB::table('supplierinvoices')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('supplier_id', function($sub) use ($companyId) {
-                        // supplierinvoices tidak punya company_id langsung
-                        // filter via supplier_po → company_id
-                        $sub->select('supplier_id')
-                            ->from('supplier_purchase_orders')
-                            ->where('company_id', $companyId);
-                    }));
+                /*
+                 * ✅ FIX: "Cardinality violation: Subquery returns more than 1 row"
+                 *
+                 * SEBELUM (❌ BUGGY):
+                 *   ->where('supplier_id', function($sub) { $sub->select('supplier_id')... })
+                 *   Operator '=' hanya bisa menampung 1 baris. Jika subquery
+                 *   mengembalikan >1 baris → MySQL error 1242.
+                 *
+                 * SESUDAH (✅ FIXED):
+                 *   Gunakan JOIN langsung ke supplier_purchase_orders agar query
+                 *   lebih efisien dan tepat.
+                 *
+                 *   STRATEGI FILTER:
+                 *   - supplierinvoices TIDAK punya company_id
+                 *   - Filter via supplier_po_id → supplier_purchase_orders.company_id
+                 *     (paling akurat, karena PO memang milik company tertentu)
+                 *   - Fallback: invoices tanpa PO di-include jika supplier_id
+                 *     pernah bertransaksi dengan company (via whereIn, bukan '=')
+                 *
+                 *   Pendekatan paling aman & correct untuk dashboard stats:
+                 *   JOIN ke supplier_purchase_orders, group by supplier_invoice_id
+                 *   agar tidak double-count jika satu invoice punya banyak PO.
+                 */
+                if ($roleId !== 1 && $companyId) {
+                    $siBase = DB::table('supplierinvoices as si')
+                        ->where(function ($q) use ($companyId) {
+                            // Kasus 1: invoice punya supplier_po_id → filter via PO company_id
+                            $q->whereIn('si.supplier_po_id', function ($sub) use ($companyId) {
+                                $sub->select('supplier_po_id')
+                                    ->from('supplier_purchase_orders')
+                                    ->where('company_id', $companyId);
+                            })
+                            // Kasus 2: invoice tidak punya PO (supplier_po_id = NULL)
+                            // → filter via supplier_id IN (supplier yang pernah ada PO di company ini)
+                            ->orWhere(function ($q2) use ($companyId) {
+                                $q2->whereNull('si.supplier_po_id')
+                                   ->whereIn('si.supplier_id', function ($sub) use ($companyId) {
+                                       $sub->select('supplier_id')
+                                           ->from('supplier_purchase_orders')
+                                           ->where('company_id', $companyId)
+                                           ->distinct(); // ✅ distinct agar tidak cardinality issue
+                                   });
+                            });
+                        });
+                } else {
+                    // Super Admin: semua invoice
+                    $siBase = DB::table('supplierinvoices as si');
+                }
 
                 $data['supplier_invoices'] = [
                     'total'         => (clone $siBase)->count(),
-                    'unpaid'        => (clone $siBase)->where('payment_status', 'unpaid')->count(),
-                    'unpaid_amount' => (clone $siBase)->where('payment_status', 'unpaid')->sum('total_amount'),
-                    'paid'          => (clone $siBase)->where('payment_status', 'paid')->count(),
+                    'unpaid'        => (clone $siBase)->where('si.payment_status', 'unpaid')->count(),
+                    'unpaid_amount' => (clone $siBase)->where('si.payment_status', 'unpaid')->sum('si.total_amount'),
+                    'paid'          => (clone $siBase)->where('si.payment_status', 'paid')->count(),
                 ];
             }
 
@@ -144,23 +182,22 @@ class DashboardController extends Controller
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
 
                 $data['stock_batches'] = [
-                    'total'   => (clone $sbBase)->count(),
-                    'active'  => (clone $sbBase)->where('status', 'active')->count(),
-                    'expiring'=> (clone $sbBase)
+                    'total'    => (clone $sbBase)->count(),
+                    'active'   => (clone $sbBase)->where('status', 'active')->count(),
+                    'expiring' => (clone $sbBase)
                         ->where('status', 'active')
                         ->where('expiry_date', '<=', now()->addDays(30)->toDateString())
                         ->count(),
-                    'expired' => (clone $sbBase)->where('status', 'expired')->count(),
+                    'expired'  => (clone $sbBase)->where('status', 'expired')->count(),
                 ];
             }
 
             /* ---- MASTER DATA ---- */
             if ($this->hasMenuAccess($roleId, 'products')) {
-                // ✅ FIX: products TIDAK punya kolom is_active
                 $totalProducts = DB::table('products')->count();
                 $data['products'] = [
                     'total'  => $totalProducts,
-                    'active' => $totalProducts, // no is_active column
+                    'active' => $totalProducts,
                 ];
             }
 
@@ -171,11 +208,10 @@ class DashboardController extends Controller
             }
 
             if ($this->hasMenuAccess($roleId, 'suppliers')) {
-                // ✅ FIX: suppliers TIDAK punya kolom is_active
                 $totalSuppliers = DB::table('suppliers')->count();
                 $data['suppliers'] = [
                     'total'  => $totalSuppliers,
-                    'active' => $totalSuppliers, // no is_active column
+                    'active' => $totalSuppliers,
                 ];
             }
 
@@ -230,29 +266,27 @@ class DashboardController extends Controller
                 $transactions = $transactions->merge($invoices);
             }
 
-          if ($this->hasMenuAccess($roleId, 'payments')) {
-    $payments = DB::table('payments as p')
-        ->leftJoin('invoices as i', 'i.invoice_id', '=', 'p.invoice_id')
-        ->leftJoin('customers as c', 'c.customer_id', '=', 'i.customer_id')
-        ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
-        ->orderByDesc('p.created_at')
-        ->limit($limit)
-        ->select(
-            'p.payment_id as id',
-            DB::raw("'payment' as type"),
-            'p.payment_number as number',
-            'c.customer_name',
-            'p.amount',
-            // ✅ FIX: kolom asli = 'status', bukan 'payment_status'
-            'p.status',
-            'p.payment_date as date',
-            'p.created_at'
-        )
-        ->get();
+            if ($this->hasMenuAccess($roleId, 'payments')) {
+                $payments = DB::table('payments as p')
+                    ->leftJoin('invoices as i', 'i.invoice_id', '=', 'p.invoice_id')
+                    ->leftJoin('customers as c', 'c.customer_id', '=', 'i.customer_id')
+                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
+                    ->orderByDesc('p.created_at')
+                    ->limit($limit)
+                    ->select(
+                        'p.payment_id as id',
+                        DB::raw("'payment' as type"),
+                        'p.payment_number as number',
+                        'c.customer_name',
+                        'p.amount',
+                        'p.status',
+                        'p.payment_date as date',
+                        'p.created_at'
+                    )
+                    ->get();
 
-    $transactions = $transactions->merge($payments);
-}
-
+                $transactions = $transactions->merge($payments);
+            }
 
             if ($this->hasMenuAccess($roleId, 'supplier-po')) {
                 $spoTx = DB::table('supplier_purchase_orders as spo')
@@ -390,17 +424,15 @@ class DashboardController extends Controller
                 return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
             }
 
-           $rows = DB::table('payments as p')
-    ->join('invoices as i', 'i.invoice_id', '=', 'p.invoice_id')
-    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
-    // ✅ FIX: p.status bukan p.payment_status
-    ->where('p.status', 'success')
-    ->selectRaw('p.payment_method, COUNT(*) as count, SUM(p.amount) as total_amount')
-    ->groupBy('p.payment_method')
-    ->get();
+            $rows = DB::table('payments as p')
+                ->join('invoices as i', 'i.invoice_id', '=', 'p.invoice_id')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
+                ->where('p.status', 'success')
+                ->selectRaw('p.payment_method, COUNT(*) as count, SUM(p.amount) as total_amount')
+                ->groupBy('p.payment_method')
+                ->get();
 
-
-            $total = $rows->sum('total_amount');
+            $total  = $rows->sum('total_amount');
             $result = $rows->map(fn($r) => [
                 'payment_method' => $r->payment_method,
                 'count'          => $r->count,
@@ -471,7 +503,6 @@ class DashboardController extends Controller
 
     /* =========================================================
      * GET /api/dashboard/expiry-alerts
-     * Khusus: Warehouse + Admin + SuperAdmin
      * ========================================================= */
     public function getExpiryAlerts(Request $request)
     {
@@ -513,17 +544,9 @@ class DashboardController extends Controller
             ], 500);
         }
     }
-  /* =========================================================
+
+    /* =========================================================
      * GET /api/dashboard/omset-margin
-     *
-     * Omset = invoices.subtotal (before tax) — bisa switch ke total_amount
-     * HPP   = stock_out.quantity × stock_batches.purchase_price (aktual per batch)
-     * Margin = Omset - HPP
-     *
-     * Query params:
-     *   - period: 'this_month' | 'last_month' | 'this_year' | custom (default: this_month)
-     *   - start_date: Y-m-d  (jika period=custom)
-     *   - end_date:   Y-m-d  (jika period=custom)
      * ========================================================= */
     public function getOmsetMargin(Request $request)
     {
@@ -536,10 +559,8 @@ class DashboardController extends Controller
                 return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
             }
 
-            // ── Tentukan rentang tanggal ──────────────────────────────────
             [$startDate, $endDate] = $this->resolveDateRange($request);
 
-            // ── OMSET dari invoices (subtotal = before tax) ───────────────
             $omsetRow = DB::table('invoices')
                 ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
                 ->whereBetween('invoice_date', [$startDate, $endDate])
@@ -553,12 +574,10 @@ class DashboardController extends Controller
                 ')
                 ->first();
 
-            // ── HPP dari stock_out × purchase_price batch ─────────────────
-            // Difilter by out_date (tanggal barang keluar = tanggal delivery)
             $hppRow = DB::table('stock_out as so')
                 ->join('stock_batches as sb', 'sb.batch_id', '=', 'so.batch_id')
                 ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
-                ->where('so.transaction_type', 'sale')  // hanya transaksi penjualan
+                ->where('so.transaction_type', 'sale')
                 ->whereBetween('so.out_date', [$startDate, $endDate])
                 ->selectRaw('
                     COALESCE(SUM(so.quantity * sb.purchase_price), 0)  AS hpp,
@@ -572,9 +591,8 @@ class DashboardController extends Controller
             $margin        = $omset - $hpp;
             $marginPercent = $omset > 0 ? round(($margin / $omset) * 100, 2) : 0;
 
-            // ── Pembanding bulan sebelumnya ───────────────────────────────
-            $prevStart = \Carbon\Carbon::parse($startDate)->subMonth()->startOfMonth()->toDateString();
-            $prevEnd   = \Carbon\Carbon::parse($startDate)->subMonth()->endOfMonth()->toDateString();
+            $prevStart = Carbon::parse($startDate)->subMonth()->startOfMonth()->toDateString();
+            $prevEnd   = Carbon::parse($startDate)->subMonth()->endOfMonth()->toDateString();
 
             $prevOmset = (float) DB::table('invoices')
                 ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
@@ -594,27 +612,22 @@ class DashboardController extends Controller
                 'success' => true,
                 'period'  => ['start' => $startDate, 'end' => $endDate],
                 'data'    => [
-                    // ── Omset ──────────────────────────────────
-                    'omset'              => $omset,                       // sebelum PPN
-                    'omset_with_tax'     => (float) $omsetRow->omset_with_tax,
-                    'total_ppn'          => (float) $omsetRow->total_ppn,
-                    'omset_paid'         => (float) $omsetRow->omset_paid,
-                    'omset_unpaid'       => (float) $omsetRow->omset_unpaid,
-                    'total_invoices'     => (int) $omsetRow->total_invoices,
-
-                    // ── HPP & Margin ───────────────────────────
-                    'hpp'                => $hpp,
-                    'margin'             => $margin,
-                    'margin_percent'     => $marginPercent,
-                    'total_stock_out'    => (int) $hppRow->total_stock_out,
-
-                    // ── Perbandingan bulan sebelumnya ──────────
-                    'prev_omset'         => $prevOmset,
-                    'prev_hpp'           => $prevHpp,
-                    'prev_margin'        => $prevMargin,
-                    'omset_growth'       => $prevOmset > 0
+                    'omset'           => $omset,
+                    'omset_with_tax'  => (float) $omsetRow->omset_with_tax,
+                    'total_ppn'       => (float) $omsetRow->total_ppn,
+                    'omset_paid'      => (float) $omsetRow->omset_paid,
+                    'omset_unpaid'    => (float) $omsetRow->omset_unpaid,
+                    'total_invoices'  => (int) $omsetRow->total_invoices,
+                    'hpp'             => $hpp,
+                    'margin'          => $margin,
+                    'margin_percent'  => $marginPercent,
+                    'total_stock_out' => (int) $hppRow->total_stock_out,
+                    'prev_omset'      => $prevOmset,
+                    'prev_hpp'        => $prevHpp,
+                    'prev_margin'     => $prevMargin,
+                    'omset_growth'    => $prevOmset > 0
                         ? round((($omset - $prevOmset) / $prevOmset) * 100, 2) : 0,
-                    'margin_growth'      => $prevMargin > 0
+                    'margin_growth'   => $prevMargin > 0
                         ? round((($margin - $prevMargin) / $prevMargin) * 100, 2) : 0,
                 ],
             ], 200);
@@ -630,11 +643,6 @@ class DashboardController extends Controller
 
     /* =========================================================
      * GET /api/dashboard/omset-by-type
-     *
-     * Breakdown omset + margin per type_code (TENDER / RETAIL / ONLINE_SHOP)
-     * Join: invoices → purchase_orders → activity_types
-     *
-     * Query params: period, start_date, end_date (sama seperti omset-margin)
      * ========================================================= */
     public function getOmsetByTypeCode(Request $request)
     {
@@ -649,8 +657,6 @@ class DashboardController extends Controller
 
             [$startDate, $endDate] = $this->resolveDateRange($request);
 
-            // ── Omset per type_code ────────────────────────────────────────
-            // Invoice yang punya PO + activity_type
             $omsetByType = DB::table('invoices as i')
                 ->join('purchase_orders as po', 'po.po_id', '=', 'i.po_id')
                 ->join('activity_types as at', 'at.activity_type_id', '=', 'po.activity_type_id')
@@ -659,15 +665,14 @@ class DashboardController extends Controller
                 ->selectRaw('
                     at.type_code,
                     at.type_name,
-                    COUNT(i.invoice_id)             AS total_invoices,
-                    COALESCE(SUM(i.subtotal), 0)    AS omset,
+                    COUNT(i.invoice_id)              AS total_invoices,
+                    COALESCE(SUM(i.subtotal), 0)     AS omset,
                     COALESCE(SUM(i.total_amount), 0) AS omset_with_tax
                 ')
                 ->groupBy('at.type_code', 'at.type_name')
                 ->get()
                 ->keyBy('type_code');
 
-            // ── Invoice tanpa PO / tanpa activity_type ────────────────────
             $omsetNoType = DB::table('invoices as i')
                 ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
                 ->whereBetween('i.invoice_date', [$startDate, $endDate])
@@ -680,20 +685,18 @@ class DashboardController extends Controller
                       });
                 })
                 ->selectRaw('
-                    COUNT(invoice_id)             AS total_invoices,
-                    COALESCE(SUM(subtotal), 0)    AS omset,
+                    COUNT(invoice_id)              AS total_invoices,
+                    COALESCE(SUM(subtotal), 0)     AS omset,
                     COALESCE(SUM(total_amount), 0) AS omset_with_tax
                 ')
                 ->first();
 
-            // ── HPP per type_code via delivery_notes ──────────────────────
-            // stock_out → delivery_note → invoice → po → activity_type
             $hppByType = DB::table('stock_out as so')
-                ->join('stock_batches as sb',      'sb.batch_id',      '=', 'so.batch_id')
-                ->join('delivery_notes as dn',     'dn.delivery_note_id', '=', 'so.delivery_note_id')
-                ->join('invoices as i',            'i.invoice_id',     '=', 'dn.invoice_id')
-                ->join('purchase_orders as po',    'po.po_id',         '=', 'i.po_id')
-                ->join('activity_types as at',     'at.activity_type_id', '=', 'po.activity_type_id')
+                ->join('stock_batches as sb',   'sb.batch_id',         '=', 'so.batch_id')
+                ->join('delivery_notes as dn',  'dn.delivery_note_id', '=', 'so.delivery_note_id')
+                ->join('invoices as i',         'i.invoice_id',        '=', 'dn.invoice_id')
+                ->join('purchase_orders as po', 'po.po_id',            '=', 'i.po_id')
+                ->join('activity_types as at',  'at.activity_type_id', '=', 'po.activity_type_id')
                 ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
                 ->where('so.transaction_type', 'sale')
                 ->whereBetween('so.out_date', [$startDate, $endDate])
@@ -705,16 +708,15 @@ class DashboardController extends Controller
                 ->get()
                 ->keyBy('type_code');
 
-            // ── Gabungkan hasil ───────────────────────────────────────────
             $allTypeCodes = ['TENDER', 'RETAIL', 'ONLINE_SHOP'];
             $result       = [];
             $grandOmset   = 0;
             $grandMargin  = 0;
 
             foreach ($allTypeCodes as $code) {
-                $omset   = (float) ($omsetByType[$code]->omset ?? 0);
-                $hpp     = (float) ($hppByType[$code]->hpp    ?? 0);
-                $margin  = $omset - $hpp;
+                $omset  = (float) ($omsetByType[$code]->omset ?? 0);
+                $hpp    = (float) ($hppByType[$code]->hpp    ?? 0);
+                $margin = $omset - $hpp;
                 $grandOmset  += $omset;
                 $grandMargin += $margin;
 
@@ -730,21 +732,19 @@ class DashboardController extends Controller
                 ];
             }
 
-            // Tambah "Lainnya" (invoice tanpa type / tanpa PO)
-            $omsetLain  = (float) $omsetNoType->omset;
-            $result[] = [
+            $omsetLain = (float) $omsetNoType->omset;
+            $result[]  = [
                 'type_code'      => 'OTHER',
                 'type_name'      => 'Lainnya',
                 'total_invoices' => (int) $omsetNoType->total_invoices,
                 'omset'          => $omsetLain,
                 'omset_with_tax' => (float) $omsetNoType->omset_with_tax,
-                'hpp'            => 0,   // tidak bisa trace HPP tanpa delivery note
+                'hpp'            => 0,
                 'margin'         => $omsetLain,
                 'margin_percent' => 100,
             ];
 
-            // Hitung persentase kontribusi tiap type dari grand total
-            $grandOmset = max($grandOmset + $omsetLain, 1); // hindari div/0
+            $grandOmset = max($grandOmset + $omsetLain, 1);
             foreach ($result as &$row) {
                 $row['omset_share'] = round(($row['omset'] / $grandOmset) * 100, 2);
             }
@@ -757,7 +757,7 @@ class DashboardController extends Controller
                     'grand_omset'  => $grandOmset,
                     'grand_margin' => $grandMargin + $omsetLain,
                 ],
-                'data'    => $result,
+                'data' => $result,
             ], 200);
 
         } catch (\Exception $e) {
@@ -771,31 +771,23 @@ class DashboardController extends Controller
 
     /* =========================================================
      * GET /api/dashboard/monthly-margin
-     *
-     * Tren omset + margin per bulan (untuk chart)
-     * Query params:
-     *   - months: jumlah bulan ke belakang (default: 6, max: 24)
-     *   - type_code: TENDER | RETAIL | ONLINE_SHOP | ALL (default: ALL)
      * ========================================================= */
-public function getMonthlyMargin(Request $request)
+    public function getMonthlyMargin(Request $request)
     {
         try {
             $user      = $request->user();
             $roleId    = (int) $user->role_id;
             $companyId = $this->getCompanyId($request);
-            $typeCode  = $request->input('type_code'); // null = semua
+            $typeCode  = $request->input('type_code');
 
             if (!$this->hasMenuAccess($roleId, 'invoices') && !$this->hasMenuAccess($roleId, 'financial-report')) {
                 return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
             }
 
-            // ✅ Gunakan period yang sama dengan endpoint lain
-            // → "Tahun Ini" = Jan-Des 2026, bukan mundur N bulan dari sekarang
             [$startDate, $endDate] = $this->resolveDateRange($request);
-            $startCarbon = \Carbon\Carbon::parse($startDate)->startOfMonth();
-            $endCarbon   = \Carbon\Carbon::parse($endDate)->endOfMonth();
+            $startCarbon = Carbon::parse($startDate)->startOfMonth();
+            $endCarbon   = Carbon::parse($endDate)->endOfMonth();
 
-            // ── Omset per bulan ────────────────────────────────────────────
             $omsetQuery = DB::table('invoices as i')
                 ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
                 ->whereBetween('i.invoice_date', [
@@ -804,10 +796,9 @@ public function getMonthlyMargin(Request $request)
                 ]);
 
             if ($typeCode) {
-                // Filter by type_code — wajib ada PO + activity_type
                 $omsetQuery
                     ->join('purchase_orders as po', 'po.po_id', '=', 'i.po_id')
-                    ->join('activity_types as at',  'at.activity_type_id', '=', 'po.activity_type_id')
+                    ->join('activity_types as at', 'at.activity_type_id', '=', 'po.activity_type_id')
                     ->where('at.type_code', $typeCode);
             }
 
@@ -822,7 +813,6 @@ public function getMonthlyMargin(Request $request)
                 ->get()
                 ->keyBy(fn($r) => "{$r->year}-{$r->month}");
 
-            // ── HPP per bulan ──────────────────────────────────────────────
             $hppQuery = DB::table('stock_out as so')
                 ->join('stock_batches as sb', 'sb.batch_id', '=', 'so.batch_id')
                 ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
@@ -843,16 +833,14 @@ public function getMonthlyMargin(Request $request)
 
             $hppRaw = $hppQuery
                 ->selectRaw('
-                    YEAR(so.out_date)                                       AS year,
-                    MONTH(so.out_date)                                      AS month,
-                    COALESCE(SUM(so.quantity * sb.purchase_price), 0)      AS hpp
+                    YEAR(so.out_date)                                  AS year,
+                    MONTH(so.out_date)                                 AS month,
+                    COALESCE(SUM(so.quantity * sb.purchase_price), 0) AS hpp
                 ')
                 ->groupByRaw('YEAR(so.out_date), MONTH(so.out_date)')
                 ->get()
                 ->keyBy(fn($r) => "{$r->year}-{$r->month}");
 
-            // ── Bangun array bulan dari startDate → endDate ───────────────
-            // ✅ Iterasi bulan per bulan sesuai rentang period, bukan mundur dari sekarang
             $result  = [];
             $current = $startCarbon->copy();
 
@@ -894,7 +882,6 @@ public function getMonthlyMargin(Request $request)
 
     /* =========================================================
      * PRIVATE HELPER: resolveDateRange
-     * Mengonversi query param 'period' ke [startDate, endDate]
      * ========================================================= */
     private function resolveDateRange(Request $request): array
     {
@@ -903,29 +890,29 @@ public function getMonthlyMargin(Request $request)
         switch ($period) {
             case 'last_month':
                 return [
-                    \Carbon\Carbon::now()->subMonth()->startOfMonth()->toDateString(),
-                    \Carbon\Carbon::now()->subMonth()->endOfMonth()->toDateString(),
+                    Carbon::now()->subMonth()->startOfMonth()->toDateString(),
+                    Carbon::now()->subMonth()->endOfMonth()->toDateString(),
                 ];
             case 'this_year':
                 return [
-                    \Carbon\Carbon::now()->startOfYear()->toDateString(),
-                    \Carbon\Carbon::now()->endOfYear()->toDateString(),
+                    Carbon::now()->startOfYear()->toDateString(),
+                    Carbon::now()->endOfYear()->toDateString(),
                 ];
             case 'last_year':
                 return [
-                    \Carbon\Carbon::now()->subYear()->startOfYear()->toDateString(),
-                    \Carbon\Carbon::now()->subYear()->endOfYear()->toDateString(),
+                    Carbon::now()->subYear()->startOfYear()->toDateString(),
+                    Carbon::now()->subYear()->endOfYear()->toDateString(),
                 ];
             case 'custom':
                 return [
-                    $request->input('start_date', \Carbon\Carbon::now()->startOfMonth()->toDateString()),
-                    $request->input('end_date',   \Carbon\Carbon::now()->toDateString()),
+                    $request->input('start_date', Carbon::now()->startOfMonth()->toDateString()),
+                    $request->input('end_date',   Carbon::now()->toDateString()),
                 ];
             case 'this_month':
             default:
                 return [
-                    \Carbon\Carbon::now()->startOfMonth()->toDateString(),
-                    \Carbon\Carbon::now()->toDateString(),
+                    Carbon::now()->startOfMonth()->toDateString(),
+                    Carbon::now()->toDateString(),
                 ];
         }
     }

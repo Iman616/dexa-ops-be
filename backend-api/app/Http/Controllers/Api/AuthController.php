@@ -14,83 +14,119 @@ use Illuminate\Support\Facades\Log;
 
 class AuthController extends Controller
 {
-    /**
-     * Register new user
-     */
+    /* ==========================================================
+     * HELPER PRIVATE
+     *
+     * ✅ KEPUTUSAN ARSITEKTUR:
+     *   pivot `user_companies` → hanya untuk mencatat default/history
+     *   BUKAN untuk membatasi akses company.
+     *
+     *   Filtering data per company sudah terjadi di setiap endpoint
+     *   masing-masing (via company_id dari user_sessions).
+     *   Tidak perlu double-restriction di sini.
+     * ========================================================== */
+    private function getActiveCompanies(): \Illuminate\Support\Collection
+    {
+        // Semua role mendapat daftar yang sama: semua company aktif
+        return Company::where('is_active', true)
+            ->orderBy('company_code')
+            ->get(['company_id', 'company_code', 'company_name']);
+    }
+
+    private function formatCompanies(\Illuminate\Support\Collection $companies): \Illuminate\Support\Collection
+    {
+        return $companies->map(fn($c) => [
+            'company_id'   => $c->company_id,
+            'company_code' => $c->company_code,
+            'company_name' => $c->company_name,
+        ])->values();
+    }
+
+    /* ==========================================================
+     * POST /api/auth/register
+     * ========================================================== */
     public function register(Request $request)
     {
         $validator = Validator::make($request->all(), [
             'full_name' => 'required|string|max:255',
-            'email' => 'required|string|email|max:255|unique:users,email',
-            'username' => 'required|string|max:100|unique:users,username',
-            'password' => 'required|string|min:8|confirmed',
-            'phone' => 'nullable|string|max:50',
+            'email'     => 'required|string|email|max:255|unique:users,email',
+            'username'  => 'required|string|max:100|unique:users,username',
+            'password'  => 'required|string|min:8|confirmed',
+            'phone'     => 'nullable|string|max:50',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
         try {
             $user = User::create([
                 'full_name' => $request->full_name,
-                'email' => $request->email,
-                'username' => $request->username,
-                'password' => Hash::make($request->password),
-                'phone' => $request->phone,
-                'role_id' => 3, // Default: Sales/Marketing
+                'email'     => $request->email,
+                'username'  => $request->username,
+                'password'  => Hash::make($request->password),
+                'phone'     => $request->phone,
+                'role_id'   => 3, // Default: Sales/Marketing
                 'is_active' => true,
             ]);
 
-            // ✅ Auto-assign ke default company saat register
-            // sehingga user langsung bisa login tanpa perlu setup manual
-            $defaultCompany = Company::where('is_active', true)
-                ->where('is_default', true)
-                ->first()
-                ?? Company::where('is_active', true)->orderBy('company_id')->first();
+            // Auto-set default company untuk user baru
+            $defaultCompany = Company::where('is_active', true)->where('is_default', true)->first()
+                           ?? Company::where('is_active', true)->orderBy('company_id')->first();
 
             if ($defaultCompany) {
-                $user->companies()->attach($defaultCompany->company_id, [
-                    'is_default' => 1,
-                ]);
+                $user->companies()->attach($defaultCompany->company_id, ['is_default' => 1]);
                 $user->update(['default_company_id' => $defaultCompany->company_id]);
             }
 
             ActivityLog::create([
-                'user_id' => $user->user_id,
-                'action' => 'register',
-                'module' => 'auth',
+                'user_id'     => $user->user_id,
+                'action'      => 'register',
+                'module'      => 'auth',
                 'description' => 'User registered: ' . $user->username,
-                'ip_address' => $request->ip()
+                'ip_address'  => $request->ip()
             ]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'User registered successfully',
-                'data' => [
+                'data'    => [
                     'user' => [
-                        'user_id' => $user->user_id,
-                        'username' => $user->username,
-                        'email' => $user->email,
+                        'user_id'   => $user->user_id,
+                        'username'  => $user->username,
+                        'email'     => $user->email,
                         'full_name' => $user->full_name,
                     ]
                 ]
             ], 201);
+
         } catch (\Exception $e) {
             Log::error('Registration error: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Registration failed',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage()
             ], 500);
         }
     }
 
-
+    /* ==========================================================
+     * POST /api/auth/login
+     *
+     * BUG SEBELUMNYA:
+     *   Non-SA → $companies = $user->companies()->where(is_active)...
+     *   Jika user hanya punya 1 row di pivot user_companies (misal
+     *   company_id=3), maka dropdown hanya tampil 1 company.
+     *   User tidak bisa pilih company lain meskipun company itu aktif.
+     *
+     * FIX:
+     *   Semua user mendapat daftar SEMUA company aktif.
+     *   Pivot user_companies hanya untuk menentukan default company.
+     * ========================================================== */
     public function login(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -102,12 +138,11 @@ class AuthController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
         try {
-            // Load user dengan eager loading
             $user = User::where('username', $request->username)
                         ->orWhere('email', $request->username)
                         ->with(['role.permissions.menu', 'companies', 'defaultCompany'])
@@ -127,81 +162,33 @@ class AuthController extends Controller
                 ], 403);
             }
 
-            // Get companies sesuai role
-            if ($user->role_id === 1) {
-                // Super Admin: semua companies aktif
-                $companies = Company::where('companies.is_active', true)
-                    ->orderBy('companies.company_code')
-                    ->get(['companies.company_id', 'companies.company_code', 'companies.company_name']);
-            } else {
-                // Normal user: hanya yang di-assign + aktif
-                $companies = $user->companies()
-                    ->where('companies.is_active', true)
-                    ->orderBy('companies.company_code')
-                    ->get(['companies.company_id', 'companies.company_code', 'companies.company_name']);
-            }
+            // ✅ FIX #1 — Semua user dapat semua company aktif
+            $companies = $this->getActiveCompanies();
 
-            // ✅ FIX: Jika user belum di-assign ke company manapun,
-            // auto-assign ke default/pertama company yang aktif
-            // (terjadi pada user yang dibuat via admin panel tanpa assign company)
-            if ($companies->isEmpty() && $user->role_id !== 1) {
-                $defaultCompany = Company::where('is_active', true)
-                    ->where('is_default', true)
-                    ->first()
-                    ?? Company::where('is_active', true)->orderBy('company_id')->first();
-
-                if ($defaultCompany) {
-                    // Attach ke user_companies
-                    $user->companies()->syncWithoutDetaching([
-                        $defaultCompany->company_id => ['is_default' => 1]
-                    ]);
-                    $user->update(['default_company_id' => $defaultCompany->company_id]);
-
-                    // Reload companies setelah assign
-                    $companies = $user->companies()
-                        ->where('companies.is_active', true)
-                        ->orderBy('companies.company_code')
-                        ->get(['companies.company_id', 'companies.company_code', 'companies.company_name']);
-
-                    Log::info('Auto-assigned user to default company', [
-                        'user_id'    => $user->user_id,
-                        'username'   => $user->username,
-                        'company_id' => $defaultCompany->company_id,
-                    ]);
-                }
-            }
-
-            // Jika masih kosong setelah auto-assign (tidak ada company aktif sama sekali)
             if ($companies->isEmpty()) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Tidak ada company aktif yang tersedia. Hubungi administrator.',
+                    'message' => 'Tidak ada company aktif. Hubungi administrator.',
                 ], 403);
             }
 
-            // Tentukan selected company
+            // Tentukan selected company:
+            // 1. Pakai default_company_id user jika ada & masih aktif
+            // 2. Fallback ke company pertama yang aktif
             $selectedCompany = null;
 
             if ($user->default_company_id) {
                 $selectedCompany = $companies->firstWhere('company_id', $user->default_company_id);
             }
 
-            // Fallback: pilih yang pertama
             if (!$selectedCompany) {
                 $selectedCompany = $companies->first();
                 $user->update(['default_company_id' => $selectedCompany->company_id]);
             }
 
-            // Create token
             $token = $user->createToken('auth_token')->plainTextToken;
-
-            // Update last login
             $user->update(['last_login' => now()]);
 
-            // Get permissions
-            $permissions = $user->permissions;
-
-            // Create session
             UserSession::create([
                 'user_id'             => $user->user_id,
                 'session_token'       => $token,
@@ -212,7 +199,6 @@ class AuthController extends Controller
                 'login_at'            => now(),
             ]);
 
-            // Log activity
             ActivityLog::create([
                 'user_id'     => $user->user_id,
                 'action'      => 'login',
@@ -221,23 +207,17 @@ class AuthController extends Controller
                 'ip_address'  => $request->ip()
             ]);
 
-            $companiesFormatted = $companies->map(fn($c) => [
-                'company_id'   => $c->company_id,
-                'company_code' => $c->company_code,
-                'company_name' => $c->company_name,
-            ])->values();
-
             Log::info('Login successful', [
-                'user_id'            => $user->user_id,
-                'username'           => $user->username,
-                'companies_count'    => $companies->count(),
-                'selected_company_id'=> $selectedCompany->company_id,
+                'user_id'             => $user->user_id,
+                'username'            => $user->username,
+                'companies_available' => $companies->count(),
+                'selected_company_id' => $selectedCompany->company_id,
             ]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Login successful',
-                'data' => [
+                'data'    => [
                     'user' => [
                         'user_id'      => $user->user_id,
                         'username'     => $user->username,
@@ -250,10 +230,10 @@ class AuthController extends Controller
                         'company_name' => $selectedCompany->company_name,
                         'last_login'   => $user->last_login,
                     ],
-                    'token'      => $token,
-                    'token_type' => 'Bearer',
-                    'permissions' => $permissions,
-                    'companies'   => $companiesFormatted,
+                    'token'            => $token,
+                    'token_type'       => 'Bearer',
+                    'permissions'      => $user->permissions,
+                    'companies'        => $this->formatCompanies($companies),
                     'selected_company' => [
                         'company_id'   => $selectedCompany->company_id,
                         'company_code' => $selectedCompany->company_code,
@@ -263,21 +243,32 @@ class AuthController extends Controller
             ], 200);
 
         } catch (\Exception $e) {
-            Log::error('Login error: ' . $e->getMessage(), [
-                'trace' => $e->getTraceAsString()
-            ]);
-
+            Log::error('Login error: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
             return response()->json([
                 'success' => false,
                 'message' => 'Login failed',
-                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
+                'error'   => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }
 
-    /**
-     * Switch company
-     */
+    /* ==========================================================
+     * POST /api/auth/switch-company
+     *
+     * BUG SEBELUMNYA:
+     *   if ($user->role_id !== 1 && !$user->hasAccessToCompany($companyId))
+     *       → return 403
+     *
+     *   hasAccessToCompany() mengecek pivot user_companies.
+     *   Non-SA yang hanya punya 1 company di pivot → selalu 403
+     *   saat coba switch ke company lain.
+     *
+     * FIX:
+     *   Hapus pengecekan hasAccessToCompany().
+     *   Validasi cukup: company harus ada dan is_active=true.
+     *   Data tetap aman karena setiap endpoint filter by company_id
+     *   dari session — user hanya lihat data company yang sedang aktif.
+     * ========================================================== */
     public function switchCompany(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -288,30 +279,40 @@ class AuthController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
         try {
             $user      = $request->user();
-            $companyId = $request->company_id;
+            $companyId = (int) $request->company_id;
 
-            // Validasi akses (Super Admin bypass)
-            if ($user->role_id !== 1 && !$user->hasAccessToCompany($companyId)) {
+            // ✅ FIX #2 — Validasi cukup: company harus aktif
+            // DIHAPUS: if ($user->role_id !== 1 && !$user->hasAccessToCompany($companyId)) → 403
+            $company = Company::where('company_id', $companyId)
+                               ->where('is_active', true)
+                               ->first();
+
+            if (!$company) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Anda tidak memiliki akses ke company ini'
-                ], 403);
+                    'message' => 'Company tidak ditemukan atau tidak aktif.'
+                ], 404);
             }
 
+            // Update default company user & session
             $user->update(['default_company_id' => $companyId]);
 
+            // Catat di pivot sebagai audit trail (tidak membatasi akses)
+            $user->companies()->syncWithoutDetaching([
+                $companyId => ['is_default' => 1]
+            ]);
+
+            // Update session aktif dengan company baru
             $token = $request->bearerToken();
             UserSession::where('session_token', $token)
                        ->where('user_id', $user->user_id)
                        ->update(['selected_company_id' => $companyId]);
-
-            $company = Company::find($companyId);
 
             ActivityLog::create([
                 'user_id'     => $user->user_id,
@@ -321,10 +322,16 @@ class AuthController extends Controller
                 'ip_address'  => $request->ip()
             ]);
 
+            Log::info('Company switched', [
+                'user_id'    => $user->user_id,
+                'username'   => $user->username,
+                'company_id' => $companyId,
+            ]);
+
             return response()->json([
                 'success' => true,
                 'message' => "Berhasil beralih ke {$company->company_name}",
-                'data' => [
+                'data'    => [
                     'selected_company' => [
                         'company_id'   => $company->company_id,
                         'company_code' => $company->company_code,
@@ -336,45 +343,54 @@ class AuthController extends Controller
 
         } catch (\Exception $e) {
             Log::error('Switch company error: ' . $e->getMessage());
-
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to switch company',
-                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
+                'error'   => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }
 
-    /**
-     * Get authenticated user (dengan permissions)
-     */
+    /* ==========================================================
+     * GET /api/auth/me
+     *
+     * BUG SEBELUMNYA:
+     *   Non-SA → $companies = $user->companies()->where(is_active)...
+     *   Sama seperti login — hanya pivot, bukan semua company aktif.
+     *   Setelah login + switch company, /me masih return list lama
+     *   sehingga frontend tidak tahu company lain tersedia.
+     *
+     * FIX:
+     *   Return semua company aktif + resolve selected_company
+     *   dari session (bukan dari default_company_id saja).
+     * ========================================================== */
     public function me(Request $request)
     {
         try {
             $user = $request->user()->load(['role.permissions.menu', 'companies', 'defaultCompany']);
 
-            if ($user->role_id === 1) {
-                $companies = Company::where('companies.is_active', true)
-                    ->orderBy('companies.company_code')
-                    ->get(['companies.company_id', 'companies.company_code', 'companies.company_name']);
-            } else {
-                $companies = $user->companies()
-                    ->where('companies.is_active', true)
-                    ->orderBy('companies.company_code')
-                    ->get(['companies.company_id', 'companies.company_code', 'companies.company_name']);
-            }
+            // ✅ FIX #3 — Semua user dapat semua company aktif
+            $companies = $this->getActiveCompanies();
 
-            $companiesFormatted = $companies->map(fn($c) => [
-                'company_id'   => $c->company_id,
-                'company_code' => $c->company_code,
-                'company_name' => $c->company_name,
-            ])->values();
+            // Resolve selected company dari session yang sedang aktif
+            // (bukan dari default_company_id, agar konsisten dengan switchCompany)
+            $token   = $request->bearerToken();
+            $session = \Illuminate\Support\Facades\DB::table('user_sessions')
+                ->where('session_token', $token)
+                ->where('user_id', $user->user_id)
+                ->where('is_active', true)
+                ->orderByDesc('login_at')
+                ->first();
 
-            $permissions = $user->permissions;
+            $selectedCompanyId = $session?->selected_company_id
+                              ?? $user->default_company_id;
+
+            $selectedCompany = $companies->firstWhere('company_id', $selectedCompanyId)
+                            ?? $companies->first();
 
             return response()->json([
                 'success' => true,
-                'data' => [
+                'data'    => [
                     'user' => [
                         'user_id'      => $user->user_id,
                         'username'     => $user->username,
@@ -383,17 +399,17 @@ class AuthController extends Controller
                         'phone'        => $user->phone,
                         'role_id'      => $user->role_id,
                         'role_name'    => $user->role->role_name,
-                        'company_id'   => $user->default_company_id,
-                        'company_name' => $user->defaultCompany?->company_name,
+                        'company_id'   => $selectedCompany?->company_id,
+                        'company_name' => $selectedCompany?->company_name,
                         'is_active'    => $user->is_active,
                         'last_login'   => $user->last_login,
                     ],
-                    'permissions'      => $permissions,
-                    'companies'        => $companiesFormatted,
-                    'selected_company' => $user->defaultCompany ? [
-                        'company_id'   => $user->defaultCompany->company_id,
-                        'company_code' => $user->defaultCompany->company_code,
-                        'company_name' => $user->defaultCompany->company_name,
+                    'permissions'      => $user->permissions,
+                    'companies'        => $this->formatCompanies($companies),
+                    'selected_company' => $selectedCompany ? [
+                        'company_id'   => $selectedCompany->company_id,
+                        'company_code' => $selectedCompany->company_code,
+                        'company_name' => $selectedCompany->company_name,
                     ] : null,
                 ]
             ], 200);
@@ -403,14 +419,14 @@ class AuthController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to get user info',
-                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
+                'error'   => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }
 
-    /**
-     * Logout user
-     */
+    /* ==========================================================
+     * POST /api/auth/logout
+     * ========================================================== */
     public function logout(Request $request)
     {
         try {
@@ -420,7 +436,7 @@ class AuthController extends Controller
                        ->where('is_active', true)
                        ->update([
                            'logout_at' => now(),
-                           'is_active' => false
+                           'is_active' => false,
                        ]);
 
             ActivityLog::create([
@@ -440,11 +456,10 @@ class AuthController extends Controller
 
         } catch (\Exception $e) {
             Log::error('Logout error: ' . $e->getMessage());
-
             return response()->json([
                 'success' => false,
                 'message' => 'Logout failed',
-                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
+                'error'   => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }

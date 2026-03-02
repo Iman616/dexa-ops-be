@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\UserSession;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+
 
 class BaseController extends Controller
 {
@@ -21,37 +23,34 @@ class BaseController extends Controller
     {
         $user = $request->user();
 
-        // 1️⃣ Eksplisit dari request
-        if ($request->filled('company_id') && (int) $request->company_id > 0) {
-            $companyId = (int) $request->company_id;
-
-            // Validasi akses (Super Admin bypass)
-            if ($user->role_id !== 1 && !$user->hasAccessToCompany($companyId)) {
-                abort(403, 'Anda tidak memiliki akses ke company ini');
-            }
-
-            return $companyId;
-        }
-
-        // 2️⃣ Dari UserSession berdasarkan token Bearer aktif
-        $token = $request->bearerToken();
-        if ($token) {
-            $session = UserSession::where('session_token', $token)
-                ->where('user_id', $user->user_id)
-                ->where('is_active', true)
-                ->value('selected_company_id');
-
-            if ($session && (int) $session > 0) {
-                return (int) $session;
+        // ── 1. Dari header (opsional, untuk multi-company SPA) ─────────
+        if ($request->hasHeader('X-Company-ID')) {
+            $headerCompanyId = (int) $request->header('X-Company-ID');
+            if ($headerCompanyId > 0 && $this->userHasCompanyAccess($user, $headerCompanyId)) {
+                return $headerCompanyId;
             }
         }
 
-        // 3️⃣ Fallback ke default_company_id user
-        if ($user->default_company_id && (int) $user->default_company_id > 0) {
-            return (int) $user->default_company_id;
+        // ── 2. Dari session aktif ──────────────────────────────────────
+        $session = DB::table('user_sessions')
+            ->where('user_id', $user->user_id)
+            ->where('is_active', true)
+            ->orderByDesc('login_at')
+            ->value('selected_company_id');
+
+        if ($session) {
+            return (int) $session;
         }
 
-        // 4️⃣ Tidak ditemukan
-        abort(403, 'Company tidak ditemukan. Silakan login ulang atau pilih company.');
+        // ── 3. Fallback ke default_company_id ─────────────────────────
+        return (int) ($user->default_company_id ?? 0);
+    }
+
+    private function userHasCompanyAccess($user, int $companyId): bool
+    {
+        return DB::table('user_companies')
+            ->where('user_companies.user_id', $user->user_id)
+            ->where('user_companies.company_id', $companyId)  // ✅ fully-qualified
+            ->exists();
     }
 }

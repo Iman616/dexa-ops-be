@@ -39,7 +39,7 @@ class User extends Authenticatable
     protected $appends = ['name', 'display_name', 'accessible_companies'];
 
     /* ================= RELATIONSHIPS ================= */
-    
+
     public function role()
     {
         return $this->belongsTo(Role::class, 'role_id', 'role_id');
@@ -167,10 +167,17 @@ class User extends Authenticatable
     /**
      * ⭐ Check apakah user punya akses ke company
      */
-    public function hasAccessToCompany($companyId)
-    {
-        return $this->companies()->where('company_id', $companyId)->exists();
-    }
+   // app/Models/User.php
+
+/**
+ * ⭐ Check apakah user punya akses ke company
+ */
+public function hasAccessToCompany($companyId)
+{
+    // ✅ FIX: Tambahkan prefix 'companies.' agar tidak ambigu
+    return $this->companies()->where('companies.company_id', $companyId)->exists();
+}
+
 
     /**
      * ⭐ Switch ke company lain
@@ -203,13 +210,15 @@ class User extends Authenticatable
         }
     }
 
+
+
     /**
      * ⭐ Remove company
      */
     public function removeCompany($companyId)
     {
         $this->companies()->detach($companyId);
-        
+
         if ($this->default_company_id == $companyId) {
             $this->update(['default_company_id' => null]);
         }

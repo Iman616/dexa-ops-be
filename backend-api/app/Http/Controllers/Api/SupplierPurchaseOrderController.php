@@ -7,11 +7,20 @@ use App\Models\PurchaseOrder;
 use App\Models\Supplier;
 use App\Models\SupplierPurchaseOrderItem;
 use App\Models\Product;
+use App\Models\SupplierProformaInvoice;
+use App\Models\SupplierInvoiceItem;
+
+
+use App\Models\SupplierProformaInvoiceItem;
+use App\Models\Invoice;
+use App\Models\DeliveryNote;
+use App\Models\DeliveryNoteItem;
+use App\Models\SupplierInvoice;
 use App\Models\SupplierDeliveryNote;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use App\Services\AutoProcurementService;
-use Barryvdh\DomPDF\Facade\Pdf;
+use Barryvdh\DomPDF\Facade\Pdf as PDF;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Auth;
 
@@ -356,93 +365,163 @@ class SupplierPurchaseOrderController extends BaseController
      * Issue Supplier PO
      */
     public function issue(Request $request, $id)
-    {
-        $supplierPo = SupplierPurchaseOrder::find($id);
+{
+    $validator = Validator::make($request->all(), [
+        'signed_name'     => 'required|string|max:100',
+        'signed_position' => 'required|string|max:100',
+        'signed_city'     => 'required|string|max:50',
+        'signature_image' => 'nullable|string', // ✅ base64 string
+    ]);
 
-        if (!$supplierPo) {
-            return response()->json(['success' => false, 'message' => 'Supplier PO not found'], 404);
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'errors'  => $validator->errors()
+        ], 422);
+    }
+
+    try {
+        $po = SupplierPurchaseOrder::find($id);
+
+        if (!$po) {
+            return response()->json([
+                'success' => false,
+                'message' => 'PO Supplier tidak ditemukan'
+            ], 404);
         }
 
-        if ($supplierPo->status !== 'draft') {
-            return response()->json(['success' => false, 'message' => 'Only draft POs can be issued'], 422);
+        if ($po->status !== 'draft') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Hanya status draft yang bisa di-issue'
+            ], 422);
         }
 
-        $validator = Validator::make($request->all(), [
-            'signed_name'     => 'required|string',
-            'signed_position' => 'required|string',
-            'signed_city'     => 'required|string',
+        // ✅ Handle signature_image (base64 → file)
+        $signatureImagePath = $po->signature_image; // pertahankan yang lama
+
+        if ($request->filled('signature_image')) {
+            $base64 = $request->signature_image;
+
+            // Strip prefix "data:image/png;base64," jika ada
+            if (str_contains($base64, ';base64,')) {
+                [, $base64] = explode(';base64,', $base64);
+            }
+
+            $decoded  = base64_decode($base64);
+            $filename = 'signatures/supplier_po_' . $id . '_' . time() . '.png';
+
+            \Illuminate\Support\Facades\Storage::disk('public')->put($filename, $decoded);
+
+            $signatureImagePath = $filename;
+        }
+
+        $po->update([
+            'status'          => 'issued',
+            'signed_name'     => $request->signed_name,
+            'signed_position' => $request->signed_position,
+            'signed_city'     => $request->signed_city,
+            'issued_at'       => now(),
+            'issued_by'       => Auth::id(),
+            'signature_image' => $signatureImagePath, // ✅
         ]);
 
-        if ($validator->fails()) {
-            return response()->json(['success' => false, 'message' => 'Validation error', 'errors' => $validator->errors()], 422);
-        }
+        return response()->json([
+            'success' => true,
+            'message' => 'PO Supplier berhasil diterbitkan',
+            'data'    => $po->fresh(['supplier', 'company', 'items.product']),
+        ]);
 
-        try {
-            $supplierPo->update([
-                'status'          => 'issued',
-                'signed_name'     => $request->signed_name,
-                'signed_position' => $request->signed_position,
-                'signed_city'     => $request->signed_city,
-                'issued_at'       => now(),
-                'issued_by'       => Auth::id(),
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Supplier PO issued successfully',
-                'data'    => $supplierPo->load(['supplier', 'company', 'items.product', 'issuedByUser']),
-            ]);
-
-        } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => 'Failed to issue supplier PO', 'error' => $e->getMessage()], 500);
-        }
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal menerbitkan PO Supplier',
+            'error'   => $e->getMessage()
+        ], 500);
     }
+}
 
     /**
      * Update status
      */
-    public function updateStatus(Request $request, $id)
-    {
-        $supplierPo = SupplierPurchaseOrder::with(['items.product', 'supplier', 'company'])->find($id);
+   public function updateStatus(Request $request, $id)
+{
+    $supplierPo = SupplierPurchaseOrder::with([
+        'items.product',
+        'supplier',
+        'company',
+        'purchaseOrder.customer', // untuk customer invoice / DN
+    ])->find($id);
 
-        if (!$supplierPo) {
-            return response()->json(['success' => false, 'message' => 'Supplier PO not found'], 404);
+    if (!$supplierPo) {
+        return response()->json(['success' => false, 'message' => 'Supplier PO not found'], 404);
+    }
+
+    $validator = Validator::make($request->all(), [
+        'status' => 'required|in:draft,issued,partial,completed,cancelled',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Validation error',
+            'errors'  => $validator->errors(),
+        ], 422);
+    }
+
+    DB::beginTransaction();
+    try {
+        $oldStatus = $supplierPo->status;
+        $newStatus = $request->status;
+
+        // Update status SPO
+        $supplierPo->update(['status' => $newStatus]);
+
+        $draftSupplierDN       = null;
+        $draftSupplierPI       = null;
+        $draftSupplierInvoice  = null;
+        $draftCustomerDN       = null;
+
+        // 1️⃣ partial → auto Supplier PI + SDN draft, NO invoice
+        if ($newStatus === 'partial' && $oldStatus !== 'partial') {
+            $draftSupplierPI = $this->ensureSupplierProformaExists($supplierPo);
+            $draftSupplierDN = $this->createDraftDeliveryNote($supplierPo);
         }
 
-        $validator = Validator::make($request->all(), [
-            'status' => 'required|in:draft,issued,partial,completed,cancelled',
+        // 2️⃣ completed → TIDAK buat PI, hanya Supplier Invoice draft + Customer DN draft
+        if ($newStatus === 'completed' && $oldStatus !== 'completed') {
+            $draftSupplierInvoice = $this->createDraftSupplierInvoice($supplierPo);
+            // kalau sebelumnya belum pernah dibuat SDN, buat di sini
+            $draftSupplierDN = $draftSupplierDN ?? $this->createDraftDeliveryNote($supplierPo);
+            $draftCustomerDN = $this->createDraftCustomerDeliveryNoteFromCustomerInvoice($supplierPo);
+        }
+
+        DB::commit();
+
+        return response()->json([
+            'success'               => true,
+            'message'               => 'Status updated successfully'
+                . ($draftSupplierDN ? ' + Draft Supplier DN dibuat' : '')
+                . ($draftSupplierPI ? ' + Supplier PI draft' : '')
+                . ($draftSupplierInvoice ? ' + Supplier Invoice draft' : '')
+                . ($draftCustomerDN ? ' + Customer DN draft' : ''),
+            'data'                  => $supplierPo,
+            'draft_supplier_pi'     => $draftSupplierPI,
+            'draft_supplier_dn'     => $draftSupplierDN,
+            'draft_supplier_invoice'=> $draftSupplierInvoice,
+            'draft_customer_dn'     => $draftCustomerDN,
         ]);
 
-        if ($validator->fails()) {
-            return response()->json(['success' => false, 'message' => 'Validation error', 'errors' => $validator->errors()], 422);
-        }
-
-        DB::beginTransaction();
-        try {
-            $oldStatus = $supplierPo->status;
-            $newStatus = $request->status;
-
-            $supplierPo->update(['status' => $newStatus]);
-
-            $draftDeliveryNote = null;
-            if ($newStatus === 'completed' && $oldStatus !== 'completed') {
-                $draftDeliveryNote = $this->createDraftDeliveryNote($supplierPo);
-            }
-
-            DB::commit();
-
-            return response()->json([
-                'success'             => true,
-                'message'             => 'Status updated successfully' . ($draftDeliveryNote ? '. Draft Surat Jalan telah dibuat.' : ''),
-                'data'                => $supplierPo,
-                'draft_delivery_note' => $draftDeliveryNote,
-            ]);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['success' => false, 'message' => 'Failed to update status', 'error' => $e->getMessage()], 500);
-        }
+    } catch (\Exception $e) {
+        DB::rollBack();
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to update status',
+            'error'   => $e->getMessage(),
+        ], 500);
     }
+}
+
 
     /**
      * Delete Supplier PO (only if draft)
@@ -567,4 +646,175 @@ class SupplierPurchaseOrderController extends BaseController
 
         return [$subtotal, $preparedItems];
     }
+    private function ensureSupplierProformaExists(SupplierPurchaseOrder $spo): ?SupplierProformaInvoice
+{
+    // Kalau sudah link ke PI supplier, gunakan yang sudah ada
+    if (!empty($spo->supplier_proforma_id)) {
+        return SupplierProformaInvoice::with('items')
+            ->find($spo->supplier_proforma_id);
+    }
+
+    // Hitung subtotal dari item SPO
+  $subtotal = $spo->items->reduce(
+    fn($carry, $item) => $carry + ($item->quantity * $item->unit_price),
+    0
+);
+    $taxPercentage = 11;
+    $taxAmount     = $subtotal * ($taxPercentage / 100);
+    $totalAmount   = $subtotal + $taxAmount;
+
+    // Nomor PI supplier (boleh pakai pattern yang sudah kamu pakai)
+    $spiNumber = $this->generateSupplierProformaNumber($spo->company_id);
+
+    $spi = SupplierProformaInvoice::create([
+        'company_id'               => $spo->company_id,
+        'supplier_id'              => $spo->supplier_id,
+        'supplier_po_id'           => $spo->supplier_po_id,
+        'supplier_proforma_number' => $spiNumber,
+        'supplier_proforma_date'   => now()->toDateString(),
+        'valid_until'              => now()->addDays(30),
+        'subtotal'                 => $subtotal,
+        'tax_percentage'           => $taxPercentage,
+        'tax_amount'               => $taxAmount,
+        'discount_amount'          => 0,
+        'total_amount'             => $totalAmount,
+        'status'                   => 'draft',
+        'notes'                    => 'Auto-generated dari Supplier PO #' . $spo->po_number,
+        'created_by'               => Auth::id(),
+    ]);
+
+    foreach ($spo->items as $item) {
+        SupplierProformaInvoiceItem::create([
+            'supplier_proforma_id' => $spi->supplier_proforma_id,
+            'product_id'           => $item->product_id,
+            'product_name'         => $item->product_name,
+            'product_description'  => null,
+            'quantity'             => $item->quantity,
+            'unit'                 => $item->unit,
+            'unit_price'           => $item->unit_price,
+            'notes'                => $item->product_name,
+        ]);
+    }
+
+    // Link ke SPO (kalau kamu punya kolom ini di tabel supplier_purchase_orders)
+    $spo->update(['supplier_proforma_id' => $spi->supplier_proforma_id]);
+
+
+    return $spi->load('items');
+}
+
+/**
+ * Contoh generator nomor PI supplier
+ */
+private function generateSupplierProformaNumber(int $companyId): string
+{
+    $company = DB::table('companies')->where('company_id', $companyId)->first();
+    $code = $company->company_code ?? 'UNK';
+
+    $last = SupplierProformaInvoice::where('company_id', $companyId)
+        ->whereYear('supplier_proforma_date', now()->year)
+        ->orderByDesc('supplier_proforma_id')
+        ->first();
+
+    $num = $last ? (int)substr($last->supplier_proforma_number, -4) + 1 : 1;
+
+    return 'SPI/' . $code . '/' . now()->format('Ym') . '/' . str_pad($num, 4, '0', STR_PAD_LEFT);
+}
+private function createDraftSupplierInvoice(SupplierPurchaseOrder $spo): ?SupplierInvoice
+{
+    // Kalau sudah ada invoice supplier dari SPO ini, jangan buat lagi
+    $existing = SupplierInvoice::where('supplier_po_id', $spo->supplier_po_id)->first();
+    if ($existing) {
+        return $existing->load('items');
+    }
+
+    $number = 'DRAFT-INV-SUP-' . $spo->po_number;
+
+    $invoice = SupplierInvoice::create([
+        'supplier_id'              => $spo->supplier_id,
+        'supplier_po_id'           => $spo->supplier_po_id,
+        'supplier_delivery_note_id'=> null,
+        'invoice_number'           => $number,
+        'invoice_date'             => now(),
+        'due_date'                 => now()->addDays(30),
+        'payment_terms'            => 'net30',
+        'total_amount'             => $spo->total_amount,
+        'paid_amount'              => 0,
+        'payment_status'           => 'unpaid',
+        'invoice_status'           => 'draft',
+        'notes'                    => 'Auto-generated draft dari Supplier PO #' . $spo->po_number,
+        'created_by'               => Auth::id(),
+        'created_at'               => now(),
+        'updated_at'               => now(),
+    ]);
+
+    foreach ($spo->items as $item) {
+        SupplierInvoiceItem::create([
+            'supplier_invoice_id' => $invoice->supplier_invoice_id,
+            'product_id'          => $item->product_id,
+            'product_name'        => $item->product_name,
+            'quantity'            => $item->quantity,
+            'unit'                => $item->unit,
+            'unit_price'          => $item->unit_price,
+            'created_at'          => now(),
+        ]);
+    }
+
+
+    return $invoice->load('items');
+}
+private function createDraftCustomerDeliveryNoteFromCustomerInvoice(SupplierPurchaseOrder $spo): ?DeliveryNote
+{
+    if (!$spo->po_id) {
+        return null;
+    }
+
+    // Cari invoice customer dari PO customer
+    $customerInvoice = Invoice::with(['customer', 'company', 'items'])
+        ->where('po_id', $spo->po_id)
+        ->first();
+
+    if (!$customerInvoice) {
+        return null;
+    }
+
+    $company = $customerInvoice->company;
+    $code    = $company->company_code ?? 'UNK';
+
+    $last = DeliveryNote::where('company_id', $company->company_id)
+        ->orderByDesc('delivery_note_id')
+        ->first();
+
+    $num = $last ? (int)substr($last->delivery_note_number, -4) + 1 : 1;
+    $dnNumber = 'SJ/' . $code . '/' . now()->format('Ym') . '/' . str_pad($num, 4, '0', STR_PAD_LEFT);
+
+    $deliveryNote = DeliveryNote::create([
+        'company_id'           => $company->company_id,
+        'invoice_id'           => $customerInvoice->invoice_id,
+        'po_id'                => $spo->po_id,
+        'delivery_note_number' => $dnNumber,
+        'delivery_date'        => now()->toDateString(),
+        'recipient_name'       => $customerInvoice->customer->customer_name ?? 'N/A',
+        'recipient_address'    => $customerInvoice->customer->address ?? '',
+        'status'               => 'draft',
+        'notes'                => 'Auto-generated dari Supplier PO #' . $spo->po_number,
+        'created_by'           => Auth::id(),
+    ]);
+
+    foreach ($customerInvoice->items as $item) {
+        DeliveryNoteItem::create([
+            'delivery_note_id' => $deliveryNote->delivery_note_id,
+            'invoice_item_id'  => $item->item_id,
+            'product_id'       => $item->product_id,
+            'product_name'     => $item->product_name,
+            'quantity'         => $item->quantity,
+            'unit'             => $item->unit,
+            'notes'            => $item->notes ?? null,
+        ]);
+    }
+
+
+    return $deliveryNote->load(['items', 'invoice.customer']);
+}
+
 }

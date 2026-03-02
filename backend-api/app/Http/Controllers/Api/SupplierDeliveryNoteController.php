@@ -339,6 +339,7 @@ public function receiveGoods(Request $request, $id)
             'received_datetime'         => 'nullable|date',
             'auto_create_draft_invoice' => 'nullable|boolean',
             'payment_terms'             => 'nullable|in:net7,net14,net30,net60',
+            'nullable|image|mimes:png,jpg,jpeg,svg|max:2048',
         ]);
 
         if ($validator->fails()) {
@@ -445,17 +446,24 @@ public function receiveGoods(Request $request, $id)
 
             // Update DN status
             $deliveryNote->update([
-                'status'            => 'received',
-                'received_datetime' => $receivedDatetime,
-                'receiver_name'     => $request->receiver_name,
-                'receiver_position' => $request->receiver_position,
-                'received_by'       => Auth::id(),
-            ]);
+    'status'             => 'received',
+    'received_datetime'  => $receivedDatetime,
+    'receiver_name'      => $request->receiver_name,
+    'receiver_position'  => $request->receiver_position,
+    'received_by'        => Auth::id(),
+    'receiver_signature' => $signaturePath, // ✅ tambah
+]);
 
             // Update Supplier PO status
             if ($deliveryNote->supplier_po_id) {
                 $this->updateSupplierPoStatus($deliveryNote->supplier_po_id);
             }
+
+            $signaturePath = null;
+if ($request->hasFile('receiver_signature')) {
+    $signaturePath = $request->file('receiver_signature')
+        ->store('signatures/delivery-notes', 'public');
+}
 
             // Auto-create draft invoice
             $draftInvoice = null;
@@ -487,6 +495,93 @@ public function receiveGoods(Request $request, $id)
             return response()->json(['success' => false, 'message' => 'Failed to receive goods', 'error' => $e->getMessage()], 500);
         }
     }
+
+    /**
+ * Auto-create draft Delivery Note dari PO yang status 'completed'
+ * POST /api/supplier-purchase-orders/{id}/create-delivery-note
+ */
+public function createDraftDeliveryNote(Request $request, $supplierPoId)
+{
+    $po = SupplierPurchaseOrder::with([
+        'company',
+        'supplier',
+        'items.product',
+        'items.receivedStockIns'
+    ])->findOrFail($supplierPoId);
+
+    // Validasi: PO harus completed dan belum ada full delivery
+    if ($po->status !== 'completed') {
+        return response()->json([
+            'success' => false,
+            'message' => 'PO harus status "completed" untuk buat delivery note'
+        ], 422);
+    }
+
+    // Hitung total yang sudah diterima
+    $totalOrdered  = $po->items->sum('quantity');
+    $totalReceived = $po->items->sum('received_quantity');
+
+    if ($totalReceived >= $totalOrdered) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Semua item sudah diterima, tidak perlu delivery note baru'
+        ], 422);
+    }
+
+    try {
+        DB::beginTransaction();
+
+        // Generate nomor DN draft
+        $draftNumber = 'DRAFT-DN-' . $po->po_number;
+
+        // Buat draft DN
+        $deliveryNote = SupplierDeliveryNote::create([
+            'company_id'             => $po->company_id,
+            'supplier_id'            => $po->supplier_id,
+            'supplier_po_id'         => $po->supplier_po_id,
+            'delivery_note_number'   => $draftNumber,
+            'delivery_note_date'     => now(),
+            'status'                 => 'draft',  // ✅ DRAFT
+            'notes'                  => "Auto-generated draft dari PO {$po->po_number}",
+            'created_by'             => Auth::id(),
+        ]);
+
+        // Copy item yang belum diterima (balance)
+        foreach ($po->items as $poItem) {
+            $remainingQty = $poItem->quantity - $poItem->received_quantity;
+
+            if ($remainingQty > 0) {
+                SupplierDeliveryNoteItem::create([
+                    'supplier_delivery_note_id' => $deliveryNote->supplier_delivery_note_id,
+                    'product_id'                => $poItem->product_id,
+                    'batch_number'              => 'AUTO-' . time() . '-' . $poItem->product_id, // draft batch
+                    'quantity'                  => $remainingQty,
+                    'purchase_price'            => $poItem->unit_price,
+                    'notes'                     => "Balance dari PO {$po->po_number}",
+                ]);
+            }
+        }
+
+        DB::commit();
+
+        $deliveryNote->load(['company', 'supplier', 'items.product']);
+
+        return response()->json([
+            'success' => true,
+            'message' => "Draft Delivery Note dibuat: {$draftNumber}",
+            'data'    => $deliveryNote,
+        ], 201);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal buat draft delivery note',
+            'error'   => $e->getMessage(),
+        ], 500);
+    }
+}
+
 
      private function sendGoodsReceivedNotifications(
         SupplierDeliveryNote $deliveryNote,

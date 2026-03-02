@@ -32,6 +32,7 @@ protected $fillable = [
     'signed_name',
     'signed_position',
     'signed_city',
+     'signature_image',
     'issued_at',
     'issued_by',
     'created_by',
@@ -120,5 +121,5 @@ protected $fillable = [
         return "{$prefix}-{$date}-{$newNumber}";
     }
 
-    
+
 }

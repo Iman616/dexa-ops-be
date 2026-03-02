@@ -42,6 +42,11 @@ use App\Http\Controllers\Api\RoleMenuController;
 
 use App\Http\Controllers\Api\FinanceSalesExportController;
 
+use App\Http\Controllers\Api\SupplierProformaInvoiceController;
+
+
+
+
 
 
 use App\Http\Controllers\Api\InternalNotificationController;
@@ -52,9 +57,13 @@ use App\Http\Controllers\Api\SupplierInvoiceController;
 use App\Http\Controllers\Api\StockReturnController;
 use App\Http\Controllers\Api\AgentPaymentController;
 use App\Http\Controllers\Api\TenderDocumentController;
+use App\Http\Controllers\Api\StockOpnameController;
+
 use App\Http\Controllers\Api\ProductSupplierController;
 
 use App\Http\Controllers\Api\SupplierDeliveryNotePDFController;
+
+
 
 
 use App\Http\Controllers\Api\PurchaseOrderAgentTrackingController;
@@ -294,12 +303,21 @@ Route::middleware('auth:sanctum')->get('/finance/sales-report/export', [
                 ->whereNumber('id');
         });
 
+        Route::prefix('supplier-proforma-invoices')->group(function () {
+    Route::get('/', [SupplierProformaInvoiceController::class, 'index']);
+    Route::post('/', [SupplierProformaInvoiceController::class, 'store']);
+    Route::post('/{id}/issue', [SupplierProformaInvoiceController::class, 'issue']);
+});
+
+
     Route::prefix('supplier-purchase-orders')->group(function () {
         Route::get('/', [SupplierPurchaseOrderController::class, 'index']);
         Route::post('/', [SupplierPurchaseOrderController::class, 'store']);
         Route::get('/{id}', [SupplierPurchaseOrderController::class, 'show']);
         Route::put('/{id}', [SupplierPurchaseOrderController::class, 'update']);
         Route::delete('/{id}', [SupplierPurchaseOrderController::class, 'destroy']);
+        Route::post('/{supplier_po_id}/create-delivery-note', [SupplierPurchaseOrderController::class, 'createDraftDeliveryNote']);
+
 
         // Actions
         Route::post('/{id}/issue', [SupplierPurchaseOrderController::class, 'issue']);
@@ -637,15 +655,37 @@ Route::middleware('auth:sanctum')->get('/finance/sales-report/export', [
 
 
     // ==================== STOCK MOVEMENTS ====================
-    Route::prefix('stock-movements')->group(function () {
-        Route::get('/', [StockMovementController::class, 'index']);
-        Route::post('/', [StockMovementController::class, 'store']);
-        Route::get('/summary', [StockMovementController::class, 'summary']);
-        Route::get('/batch/{batchId}', [StockMovementController::class, 'historyByBatch']);
-        Route::get('/{id}', [StockMovementController::class, 'show']);
-        Route::put('/{id}', [StockMovementController::class, 'update']);
-        Route::delete('/{id}', [StockMovementController::class, 'destroy']);
-    });
+  // routes/api.php
+// ==================== STOCK MOVEMENTS ====================
+Route::middleware('auth:sanctum')->prefix('stock-movements')->group(function () {
+
+    // ✅ Static routes WAJIB di atas wildcard {id}
+    Route::get('/export',          [StockMovementController::class, 'export']);
+    Route::get('/export-report',   [StockMovementController::class, 'exportReport']);
+    Route::get('/summary',         [StockMovementController::class, 'summary']);
+    Route::get('/warehouse-report',[StockMovementController::class, 'warehouseReport']);
+
+    // ✅ Wildcard routes di bawah
+    Route::get('/',                [StockMovementController::class, 'index']);
+    Route::post('/',               [StockMovementController::class, 'store']);
+    Route::get('/batch/{batchId}', [StockMovementController::class, 'historyByBatch']);
+    Route::get('/{id}',            [StockMovementController::class, 'show']);
+    Route::put('/{id}',            [StockMovementController::class, 'update']);
+    Route::delete('/{id}',         [StockMovementController::class, 'destroy']);
+});
+
+
+// routes/api.php — tambahkan di dalam group auth:sanctum
+Route::prefix('stock-opname')->group(function () {
+    Route::get('/',                          [StockOpnameController::class, 'index']);
+    Route::post('/',                         [StockOpnameController::class, 'store']);
+    Route::get('/{id}',                      [StockOpnameController::class, 'show']);
+    Route::delete('/{id}',                   [StockOpnameController::class, 'destroy']);
+    Route::post('/{id}/complete',            [StockOpnameController::class, 'complete']);
+    Route::post('/{id}/approve',             [StockOpnameController::class, 'approve']);
+    Route::put('/{opnameId}/items/{itemId}', [StockOpnameController::class, 'updateItem']);
+});
+
 
     // ==================== SUPPLIERS ====================
     Route::prefix('suppliers')->group(function () {

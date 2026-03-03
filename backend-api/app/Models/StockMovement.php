@@ -6,29 +6,33 @@ use Illuminate\Database\Eloquent\Model;
 
 class StockMovement extends Model
 {
-    protected $table      = 'stock_movements';
+    protected $table = 'stock_movements';
     protected $primaryKey = 'movement_id';
 
     public $timestamps = false; // tabel hanya punya created_at
+protected $fillable = [
+    'product_id',
+    'batch_id',
+    'movement_type',
+    'quantity',
+    'unit_price',
+    'unit_cost',
+    'reference_id',
+    'reference_type',
+      'movement_date',
+    'notes',
+    'created_by',
+    'created_at',  // ✅ tambah
+    'updated_at',  // ✅ tambah
+];
 
-    protected $fillable = [
-        'company_id',       // ✅ TAMBAH
-        'product_id',
-        'batch_id',
-        'movement_type',    // IN, OUT, ADJUSTMENT, RETURN, RETURN_IN, RETURN_OUT
-        'quantity',
-        'unit_price',       // ✅ FIX: was unit_cost
-        'reference_id',
-        'reference_type',
-        'notes',
-        'created_by',
-    ];
 
     protected $casts = [
         'quantity'    => 'decimal:2',
-        'unit_price'  => 'decimal:2',  // ✅ FIX
-        'total_cost'  => 'decimal:2',  // generated column, read-only
+        'unit_price'  => 'decimal:2',
+        'unit_cost'   => 'decimal:2',
         'created_at'  => 'datetime',
+        'updated_at'  => 'datetime',
     ];
 
     /* ================= RELATIONSHIPS ================= */

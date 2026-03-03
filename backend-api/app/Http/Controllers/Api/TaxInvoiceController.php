@@ -4,6 +4,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 
 use App\Services\TaxInvoiceService;
+use App\Models\TaxInvoice;
+use Illuminate\Support\Facades\Storage;
+
 use App\Http\Requests\StoreTaxInvoiceRequest;
 
 use App\Http\Requests\UpdateTaxInvoiceRequest;
@@ -73,6 +76,42 @@ class TaxInvoiceController extends Controller
             ], 500);
         }
     }
+
+    /**
+ * Upload / replace file faktur pajak (semua status)
+ * POST /api/tax-invoices/{id}/upload
+ */
+public function uploadFile(Request $request, int $taxInvoiceId): JsonResponse
+{
+    $request->validate([
+        'file' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120',
+    ]);
+
+    try {
+        $taxInvoice = $this->taxInvoiceService->uploadFile(
+            $taxInvoiceId,
+            $request->file('file')
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'File faktur pajak berhasil diupload',
+            'data'    => [
+                'tax_invoice_id' => $taxInvoice->tax_invoice_id,
+                'file_path'      => $taxInvoice->file_path,
+                'file_name'      => $taxInvoice->file_name,
+                'status'         => $taxInvoice->status,
+            ],
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal upload file',
+            'error'   => $e->getMessage(),
+        ], 500);
+    }
+}
+
 
     /**
      * Display the specified tax invoice
@@ -146,24 +185,36 @@ class TaxInvoiceController extends Controller
     /**
      * Approve tax invoice
      */
-    public function approve(int $taxInvoiceId): JsonResponse
-    {
-        try {
-            $taxInvoice = $this->taxInvoiceService->approve($taxInvoiceId);
+    public function approve(Request $request, int $taxInvoiceId): JsonResponse
+{
+    $request->validate([
+        'file' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120',
+    ]);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Tax invoice approved successfully',
-                'data' => $taxInvoice,
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to approve tax invoice',
-                'error' => $e->getMessage(),
-            ], 500);
-        }
+    try {
+        // 1) upload/replace file dulu
+        $taxInvoice = $this->taxInvoiceService->uploadFile(
+            $taxInvoiceId,
+            $request->file('file')
+        );
+
+        // 2) baru approve
+        $taxInvoice = $this->taxInvoiceService->approve($taxInvoiceId);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Tax invoice approved successfully',
+            'data'    => $taxInvoice,
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to approve tax invoice',
+            'error'   => $e->getMessage(),
+        ], 500);
     }
+}
+
 
     /**
      * Reject tax invoice
@@ -250,34 +301,56 @@ public function statistics(Request $request): JsonResponse
     /**
      * Download tax invoice file
      */
-    public function download(int $taxInvoiceId): mixed
-    {
-        try {
-            $taxInvoice = $this->taxInvoiceService->getById($taxInvoiceId);
+   public function download($id)
+{
+    try {
+        $taxInvoice = TaxInvoice::findOrFail($id);
 
-            if (!$taxInvoice->file_path) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'File not found',
-                ], 404);
-            }
-
-            $filePath = storage_path('app/public/' . $taxInvoice->file_path);
-
-            if (!file_exists($filePath)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'File not found on server',
-                ], 404);
-            }
-
-            return response()->download($filePath, $taxInvoice->file_name ?? 'tax_invoice.pdf');
-        } catch (\Exception $e) {
+        if (!$taxInvoice->file_path) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to download file',
-                'error' => $e->getMessage(),
-            ], 500);
+                'message' => 'File tidak ditemukan'
+            ], 404);
         }
+
+        $fullPath = Storage::disk('public')->path($taxInvoice->file_path);
+
+        if (!file_exists($fullPath)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'File tidak ditemukan di storage'
+            ], 404);
+        }
+
+        // ✅ FIX: Sanitize filename — hapus / dan \
+        $downloadName = $taxInvoice->file_name
+            ? $this->sanitizeFilename($taxInvoice->file_name)
+            : 'faktur_pajak_' . $taxInvoice->tax_invoice_number . '.pdf';
+
+        return response()->download($fullPath, $downloadName);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal download file',
+            'error' => $e->getMessage()
+        ], 500);
     }
+}
+
+/**
+ * Sanitize filename untuk download — hapus karakter illegal
+ */
+private function sanitizeFilename(string $filename): string
+{
+    // Hapus / dan \ serta karakter illegal lain
+    $filename = str_replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], '_', $filename);
+
+    // Hapus spasi berlebihan
+    $filename = preg_replace('/\s+/', ' ', $filename);
+
+    // Trim
+    return trim($filename);
+}
+
 }

@@ -4,44 +4,88 @@
     <meta charset="utf-8">
     <title>Invoice {{ $invoice->invoice_number }}</title>
     <style>
-        body { font-family: Arial, sans-serif; font-size: 12px; }
-        .header { text-align: center; margin-bottom: 30px; }
-        .company-info { margin-bottom: 20px; }
-        .invoice-info { margin-bottom: 20px; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
-        .text-right { text-align: right; }
+        * { box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; font-size: 12px; margin: 0; padding: 20px; }
+
+        /* ── Kop Surat (hanya tampil jika PPN) ── */
+        .kop-surat {
+            text-align: center;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #000;
+            padding-bottom: 10px;
+        }
+        .kop-surat img { max-width: 100%; height: auto; }
+
+        /* ── Header Invoice ── */
+        .header { text-align: center; margin-bottom: 20px; }
+        .header h1 { margin: 0; font-size: 20px; }
+        .header h2 { margin: 4px 0 0; font-size: 14px; font-weight: normal; }
+
+        /* ── Tabel umum ── */
+        table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+        th, td { border: 1px solid #ddd; padding: 7px 8px; text-align: left; vertical-align: top; }
+        th { background-color: #f2f2f2; font-size: 11px; }
+
+        .text-right  { text-align: right; }
         .text-center { text-align: center; }
-        .total-section { margin-top: 20px; }
-        .footer { margin-top: 50px; text-align: center; font-size: 10px; color: #666; }
+
+        /* ── Baris DPP ── */
         .dpp-row td { font-size: 10px; color: #888; }
 
-           /* Header / Kop Surat */
-    .header-section {
-      text-align: center;
-      margin-bottom: 20px;
-      border-bottom: 2px solid #000;
-      padding-bottom: 10px;
-    }
+        /* ── Total section ── */
+        .total-table { width: 45%; float: right; font-size: 12px; }
+        .total-table td { border: none; padding: 4px 8px; }
+        .total-table .divider td { border-top: 1px solid #ccc; padding-top: 6px; }
+        .total-table .highlight { background-color: #f2f2f2; }
+        .total-table .highlight-green { background-color: #f0fdf4; }
 
-    .header-section img {
-      max-width: 100%;
-      height: auto;
-    }
+        .footer { margin-top: 50px; text-align: center; font-size: 10px; color: #666; }
 
+        /* ── Badge PPN / Non-PPN ── */
+        .badge-ppn     { display: inline-block; background: #dbeafe; color: #1d4ed8; border: 1px solid #93c5fd; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: bold; }
+        .badge-nonppn  { display: inline-block; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; padding: 2px 8px; border-radius: 4px; font-size: 10px; }
     </style>
 </head>
 <body>
 
 @php
-    /* ── Tax Breakdown (rumus accounting Indonesia) ── */
-    $subtotal     = (float) $invoice->subtotal;
-    $taxRate      = (float) ($invoice->tax_percentage ?? 11);
-    $dppLainnya   = round($subtotal * (11 / 12), 0);
-    $ppnAmount    = round($dppLainnya * ($taxRate / 100), 0);
+    /* ─────────────────────────────────────────────
+     *  FLAG: apakah invoice ini menggunakan PPN?
+     *  Sumber: kolom invoices.use_ppn (boolean)
+     *  Default: true untuk backward compatibility
+     * ───────────────────────────────────────────── */
+    $usePpn   = (bool) ($invoice->use_ppn ?? true);
+    $isDppNilaiLain = $usePpn; // non-PPN tidak pakai DPP Nilai Lain
+
+    /* ── Hitung subtotal dari item (setelah diskon per-item) ── */
+    $subtotal = 0;
+    foreach ($invoice->items as $item) {
+        $unitPrice = (float) $item->unit_price;
+        $qty       = (float) $item->quantity;
+        $diskonPct = (float) ($item->discount_percent ?? 0);
+        $lineTotal = $unitPrice * (1 - $diskonPct / 100) * $qty;
+        $subtotal += $lineTotal;
+    }
+    $subtotal = round($subtotal);
+
+    /* ── Tax Calculation ── */
+    $taxRate   = (float) ($invoice->tax_percentage ?? 11);
+
+    if ($usePpn && $isDppNilaiLain) {
+        // ✅ DPP Nilai Lain — gunakan EXACT fraction, BUKAN 0.9167
+        // 0.9167 → 190,674  (selisih 7 rupiah)
+        // 11/12  → 190,667  (benar ✓)
+        $dppLainnya = round($subtotal * ($taxRate / ($taxRate + 1)));
+        $ppnAmount  = round($dppLainnya * (($taxRate + 1) / 100));
+    } else {
+        // Non-PPN: tidak ada pajak, atau pajak standard
+        $dppLainnya = 0;
+        $ppnAmount  = $usePpn ? round($subtotal * ($taxRate / 100)) : 0;
+    }
+
     $totalWithTax = $subtotal + $ppnAmount;
 
+    /* ── Payment & Deductions ── */
     $totalPaid = $invoice->payments->where('status', 'success')->sum('amount');
 
     $taxDeductions = 0;
@@ -56,183 +100,205 @@
     $netReceived = max(0, $totalPaid - $taxDeductions);
     $overpayment = max(0, $totalPaid - $totalWithTax);
 
-    $poNumber  = $invoice->purchase_order?->po_number ?? $invoice->po_id ?? '-';
-    $invoiceId = $invoice->invoice_id;
+    $poNumber    = $invoice->purchase_order?->po_number ?? $invoice->po_id ?? '-';
+    $invoiceId   = $invoice->invoice_id;
+    $currency    = $invoice->currency ?? 'Rp';
+
+    /* Helper format angka */
+    $fmt = fn($n) => number_format($n, 0, ',', '.');
 @endphp
 
-    <!-- Logo -->
-    <div class="header-section">
-        @if (!empty($invoice->company->logo_path))
-            <img src="{{ public_path('storage/' . $invoice->company->logo_path) }}" alt="Logo Company" style="width:800px; height:auto;">
-        @endif
-    </div>
+{{-- ══════════════════════════════════════════════
+     KOP SURAT — hanya tampil untuk invoice PPN
+     ══════════════════════════════════════════════ --}}
+@if($usePpn)
+<div class="kop-surat">
+    @if($company->logo_path)
+        <img src="{{ public_path('storage/' . $company->logo_path) }}" alt="Logo {{ $company->company_name }}">
+    @else
+        <h2 style="margin:0;">{{ $company->company_name }}</h2>
+        <p style="margin:4px 0;">{{ $company->address }}</p>
+        <p style="margin:0;">{{ $company->phone }} | {{ $company->email }}</p>
+    @endif
+</div>
+@endif
 
-    <!-- Header -->
-    <div class="header">
-        <h1>INVOICE</h1>
-        <h2>{{ $invoice->invoice_number }}</h2>
-    </div>
+{{-- ══ Header Invoice ══ --}}
+<div class="header">
+    <h1>INVOICE</h1>
+    <h2>{{ $invoice->invoice_number }}</h2>
+    @if($usePpn)
+        <span class="badge-ppn">Invoice PPN</span>
+    @else
+        <span class="badge-nonppn">Invoice Non-PPN</span>
+    @endif
+</div>
 
-    <!-- Company Info -->
-    <div class="company-info">
-        <strong>{{ $invoice->company->company_name }}</strong><br>
-        {{ $invoice->company->address }}<br>
-        Phone: {{ $invoice->company->phone }}<br>
-        Email: {{ $invoice->company->email }}
-    </div>
+{{-- ══ Company Info (non-PPN tampilkan company info di sini, bukan kop) ══ --}}
+@if(!$usePpn)
+<div style="margin-bottom: 16px;">
+    <strong>{{ $company->company_name }}</strong><br>
+    {{ $company->address }}<br>
+    Phone: {{ $company->phone }} | Email: {{ $company->email }}
+</div>
+@endif
 
-    <!-- Bill To + Meta -->
-    <table>
+{{-- ══ Bill To + Meta ══ --}}
+<table>
+    <tr>
+        <td width="50%">
+            <strong>Bill To:</strong><br>
+            {{ $invoice->customer->customer_name }}<br>
+            {{ $invoice->customer->address }}<br>
+            Phone: {{ $invoice->customer->phone }}<br>
+            Email: {{ $invoice->customer->email }}
+        </td>
+        <td width="50%">
+            <strong>ID:</strong> {{ $invoiceId }}<br>
+            <strong>PO No.:</strong> {{ $poNumber }}<br>
+            <strong>Invoice Date:</strong> {{ $invoice->invoice_date->format('d/m/Y') }}<br>
+            <strong>Due Date:</strong> {{ $invoice->due_date->format('d/m/Y') }}<br>
+            <strong>Payment Status:</strong> {{ $invoice->payment_status_label }}<br>
+            <strong>Currency:</strong> {{ $currency }}
+        </td>
+    </tr>
+</table>
+
+{{-- ══ Items Table ══ --}}
+<table>
+    <thead>
         <tr>
-            <td width="50%">
-                <strong>Bill To:</strong><br>
-                {{ $invoice->customer->customer_name }}<br>
-                {{ $invoice->customer->address }}<br>
-                Phone: {{ $invoice->customer->phone }}<br>
-                Email: {{ $invoice->customer->email }}
-            </td>
-            <td width="50%">
-                <strong>ID:</strong> {{ $invoiceId }}<br>
-                <strong>PO No.:</strong> {{ $poNumber }}<br>
-                <strong>Invoice Date:</strong> {{ $invoice->invoice_date->format('d/m/Y') }}<br>
-                <strong>Due Date:</strong> {{ $invoice->due_date->format('d/m/Y') }}<br>
-                <strong>Payment Status:</strong> {{ $invoice->payment_status_label }}<br>
-                <strong>Currency:</strong> {{ $invoice->currency }}
-            </td>
+            <th width="4%">No</th>
+            <th width="10%">Kode</th>
+            <th width="10%">Brand</th>
+            <th width="28%">Nama Barang</th>
+            <th class="text-center" width="8%">Jumlah</th>
+            <th class="text-center" width="6%">Sat.</th>
+            <th class="text-right" width="13%">Harga</th>
+            <th class="text-right" width="8%">Diskon</th>
+            <th class="text-right" width="13%">Sub Total</th>
         </tr>
+    </thead>
+    <tbody>
+        @foreach($invoice->items as $index => $item)
+        @php
+            $unitPrice = (float) $item->unit_price;
+            $qty       = (float) $item->quantity;
+            $diskonPct = (float) ($item->discount_percent ?? 0);
+            $diskonAmt = $unitPrice * $diskonPct / 100;
+            $lineTotal = round(($unitPrice - $diskonAmt) * $qty);
+            $kode      = $item->product?->product_code ?? '-';
+            $brand     = $item->product?->brand ?? '-';
+        @endphp
+        <tr>
+            <td>{{ $index + 1 }}</td>
+            <td>{{ $kode }}</td>
+            <td>{{ $brand }}</td>
+            <td>
+                <strong>{{ $item->product_name }}</strong>
+                @if(!empty($item->product_description))
+                    <br><small style="color:#888;">{{ $item->product_description }}</small>
+                @endif
+                @if(!empty($item->notes))
+                    <br><small>{{ $item->notes }}</small>
+                @endif
+            </td>
+            <td class="text-center">{{ $fmt($qty) }}</td>
+            <td class="text-center">{{ $item->unit }}</td>
+            <td class="text-right">{{ $fmt($unitPrice) }}</td>
+            <td class="text-right">{{ $diskonPct > 0 ? $diskonPct . '%' : '-' }}</td>
+            <td class="text-right">{{ $fmt($lineTotal) }}</td>
+        </tr>
+        @endforeach
+    </tbody>
+</table>
+
+{{-- ══ Total Section ══ --}}
+<div class="total-section">
+    <table class="total-table">
+
+        {{-- Sub Total (setelah diskon per-item) --}}
+        <tr>
+            <td><strong>Sub Total</strong></td>
+            <td class="text-right">: Rp &nbsp;{{ $fmt($subtotal) }}</td>
+        </tr>
+
+        {{-- DPP Nilai Lain — hanya untuk PPN --}}
+        @if($usePpn && $dppLainnya > 0)
+        <tr class="dpp-row">
+            <td>DPP Lainnya (Konversi {{ round($taxRate) }}/{{ round($taxRate + 1) }})</td>
+            <td class="text-right">: Rp &nbsp;{{ $fmt($dppLainnya) }}</td>
+        </tr>
+
+        <tr>
+            <td><strong>Total Pajak (PPN {{ round($taxRate + 1) }}%)</strong></td>
+            <td class="text-right">: Rp &nbsp;{{ $fmt($ppnAmount) }}</td>
+        </tr>
+        @endif
+
+        {{-- Total Penjualan + Pajak --}}
+        <tr class="divider highlight">
+            <td><strong>Total Penjualan + Pajak</strong></td>
+            <td class="text-right"><strong>: Rp &nbsp;{{ $fmt($totalWithTax) }}</strong></td>
+        </tr>
+
+        {{-- Potongan PPh (hanya jika ada dan invoice PPN) --}}
+        @if($usePpn && $taxDeductions > 0)
+        <tr>
+            <td><strong>Potongan PPh (Bukti Potong)</strong></td>
+            <td class="text-right" style="color:red;">: - Rp &nbsp;{{ $fmt($taxDeductions) }}</td>
+        </tr>
+        @endif
+
+        {{-- Dibayar --}}
+        <tr>
+            <td><strong>Dibayar</strong></td>
+            <td class="text-right" style="color:green;">: Rp &nbsp;{{ $fmt($totalPaid) }}</td>
+        </tr>
+
+        {{-- Kelebihan Bayar --}}
+        @if($overpayment > 0)
+        <tr>
+            <td><strong>Kelebihan Bayar</strong></td>
+            <td class="text-right" style="color:blue;">: + Rp &nbsp;{{ $fmt($overpayment) }}</td>
+        </tr>
+        @endif
+
+        {{-- Total Harus Dibayar --}}
+        <tr class="divider">
+            <td><strong>Total Harus Dibayar</strong></td>
+            <td class="text-right" style="color:red;"><strong>: Rp &nbsp;{{ $fmt($outstanding) }}</strong></td>
+        </tr>
+
+        {{-- Diterima Bersih --}}
+        <tr class="highlight-green">
+            <td><strong>Diterima Bersih</strong></td>
+            <td class="text-right" style="color:green;"><strong>: Rp &nbsp;{{ $fmt($netReceived) }}</strong></td>
+        </tr>
+
     </table>
+</div>
 
-    <!-- Items — No, Kode, Brand, Nama Barang, Jumlah, Harga, Diskon, Sub Total -->
-    <table>
-        <thead>
-            <tr>
-                <th width="4%">No</th>
-                <th width="10%">Kode</th>
-                <th width="10%">Brand</th>
-                <th width="28%">Nama Barang</th>
-                <th class="text-center" width="8%">Jumlah</th>
-                <th class="text-center" width="6%">Sat.</th>
-                <th class="text-right" width="13%">Harga</th>
-                <th class="text-right" width="8%">Diskon</th>
-                <th class="text-right" width="13%">Sub Total</th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach($invoice->items as $index => $item)
-            @php
-                $unitPrice = (float) $item->unit_price;
-                $qty       = (float) $item->quantity;
-                $diskonPct = (float) ($item->discount_percent ?? 0);
-                $diskonAmt = $unitPrice * $diskonPct / 100;
-                $lineTotal = ($unitPrice - $diskonAmt) * $qty;
-                $kode      = $item->product?->product_code ?? '-';
-                $brand     = $item->product?->brand ?? '-';
-            @endphp
-            <tr>
-                <td>{{ $index + 1 }}</td>
-                <td>{{ $kode }}</td>
-                <td>{{ $brand }}</td>
-                <td>
-                    <strong>{{ $item->product_name }}</strong>
-                    @if(!empty($item->product_description))
-                        <br><small style="color:#888;">{{ $item->product_description }}</small>
-                    @endif
-                    @if(!empty($item->notes))
-                        <br><small>{{ $item->notes }}</small>
-                    @endif
-                </td>
-                <td class="text-center">{{ number_format($qty, 0, ',', '.') }}</td>
-                <td class="text-center">{{ $item->unit }}</td>
-                <td class="text-right">{{ number_format($unitPrice, 0, ',', '.') }}</td>
-                <td class="text-right">{{ $diskonPct > 0 ? $diskonPct . '%' : '-' }}</td>
-                <td class="text-right">{{ number_format($lineTotal, 0, ',', '.') }}</td>
-            </tr>
-            @endforeach
-        </tbody>
-    </table>
+<div style="clear: both; padding-top: 10px;"></div>
 
-    <!-- Total Section -->
-    <div class="total-section">
-        <table width="40%" style="float: right;">
-            <tr>
-                <td><strong>Sub Total:</strong></td>
-                <td class="text-right">{{ $invoice->currency }} {{ number_format($subtotal, 0, ',', '.') }}</td>
-            </tr>
+{{-- ══ Notes & Terms ══ --}}
+@if($invoice->notes)
+<div style="margin-top: 20px;">
+    <strong>Notes:</strong><br>{{ $invoice->notes }}
+</div>
+@endif
 
-            @if($invoice->discount_amount > 0)
-            <tr>
-                <td><strong>Diskon:</strong></td>
-                <td class="text-right" style="color:red;">- {{ $invoice->currency }} {{ number_format($invoice->discount_amount, 0, ',', '.') }}</td>
-            </tr>
-            @endif
+@if($invoice->payment_terms)
+<div style="margin-top: 8px;">
+    <strong>Payment Terms:</strong> {{ $invoice->payment_terms }}
+</div>
+@endif
 
-            <tr class="dpp-row">
-                <td>DPP Lainnya (Konversi 11/12):</td>
-                <td class="text-right">{{ $invoice->currency }} {{ number_format($dppLainnya, 0, ',', '.') }}</td>
-            </tr>
-
-            <tr>
-                <td><strong>Total Pajak (PPN {{ $taxRate }}%):</strong></td>
-                <td class="text-right">{{ $invoice->currency }} {{ number_format($ppnAmount, 0, ',', '.') }}</td>
-            </tr>
-
-            <tr style="background-color: #f2f2f2;">
-                <td><strong>Total Penjualan + Pajak:</strong></td>
-                <td class="text-right"><strong>{{ $invoice->currency }} {{ number_format($totalWithTax, 0, ',', '.') }}</strong></td>
-            </tr>
-
-            @if($taxDeductions > 0)
-            <tr>
-                <td><strong>Potongan PPh (Bukti Potong):</strong></td>
-                <td class="text-right" style="color:red;">- {{ $invoice->currency }} {{ number_format($taxDeductions, 0, ',', '.') }}</td>
-            </tr>
-            @endif
-
-            <tr>
-                <td><strong>Dibayar:</strong></td>
-                <td class="text-right" style="color: green;">- {{ $invoice->currency }} {{ number_format($totalPaid, 0, ',', '.') }}</td>
-            </tr>
-
-            @if($overpayment > 0)
-            <tr>
-                <td><strong>Kelebihan Bayar:</strong></td>
-                <td class="text-right" style="color:blue;">+ {{ $invoice->currency }} {{ number_format($overpayment, 0, ',', '.') }}</td>
-            </tr>
-            @endif
-
-            <tr>
-                <td><strong>Total Harus Dibayar:</strong></td>
-                <td class="text-right" style="color: red;"><strong>{{ $invoice->currency }} {{ number_format($outstanding, 0, ',', '.') }}</strong></td>
-            </tr>
-
-            <tr style="background-color: #f0fdf4;">
-                <td><strong>Diterima Bersih:</strong></td>
-                <td class="text-right" style="color:green;"><strong>{{ $invoice->currency }} {{ number_format($netReceived, 0, ',', '.') }}</strong></td>
-            </tr>
-        </table>
-    </div>
-
-    <div style="clear: both;"></div>
-
-    <!-- Notes -->
-    @if($invoice->notes)
-    <div style="margin-top: 30px;">
-        <strong>Notes:</strong><br>
-        {{ $invoice->notes }}
-    </div>
-    @endif
-
-    @if($invoice->payment_terms)
-    <div style="margin-top: 10px;">
-        <strong>Payment Terms:</strong> {{ $invoice->payment_terms }}
-    </div>
-    @endif
-
-    <!-- Footer -->
-    <div class="footer">
-        <p>Thank you for your business!</p>
-        <p>Generated on {{ now()->format('d/m/Y H:i') }}</p>
-    </div>
+{{-- ══ Footer ══ --}}
+<div class="footer">
+    <p>Thank you for your business!</p>
+    <p>Generated on {{ now()->format('d/m/Y H:i') }}</p>
+</div>
 
 </body>
 </html>

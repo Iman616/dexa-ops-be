@@ -229,19 +229,22 @@ class StockOutController extends Controller
                     ]);
 
                     // ✅ NEW: Create stock movement
-                    StockMovement::create([
-                        'product_id'      => $item->product_id,
-                        'batch_id'        => $batch->batch_id,
-                        'movement_type'   => 'OUT',  // ✅ UPPERCASE (konsisten dengan model)
-                        'quantity'        => $used,
-                        'unit_cost'       => $batch->purchase_price,
-                        'total_cost'      => $used * $batch->purchase_price,  // ✅ ADD THIS
-                        'reference_id'    => $stockOut->stock_out_id,
-                        'reference_type'  => 'stock_out',
-                        'movement_date'   => $request->out_date,  // ✅ ADD THIS
-                        'notes'           => "Stock OUT dari DN {$deliveryNote->delivery_note_number}",
-                        'created_by'      => $processedBy,
-                    ]);
+                   // ✅ Template StockMovement::create() yang benar — pakai di semua 3 lokasi
+StockMovement::create([
+    'product_id'     => $item->product_id,   // atau $request->product_id / $stockOut->product_id
+    'batch_id'       => $batch->batch_id,     // atau $stockOut->batch_id
+    'movement_type'  => 'OUT',                // atau 'ADJUSTMENT'
+    'quantity'       => $used,
+    'unit_cost'      => $batch->purchase_price,
+    'reference_id'   => $stockOut->stock_out_id,
+    'reference_type' => 'stock_out',
+    'movement_date'  => $request->out_date,   // atau now()
+    'notes'          => '...',
+    'created_by'     => $processedBy,
+    'created_at'     => now(),
+    'updated_at'     => now(),
+]);
+
 
                     $stockOutRecords[] = $stockOut;
                     $remaining -= $used;

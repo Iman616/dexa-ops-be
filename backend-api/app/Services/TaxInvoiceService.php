@@ -75,6 +75,7 @@ class TaxInvoiceService
         return $result;
     }
 
+
     /**
      * ✅ FIXED: Get single tax invoice by ID
      */
@@ -341,35 +342,49 @@ public function approve(int $taxInvoiceId): TaxInvoice
     {
         $company = \App\Models\Company::find($companyId);
         $companyCode = $company->company_code ?? 'DXM';
-        
+
         $year = date('Y');
         $month = date('m');
-        
+
         // Get last number
         $lastTaxInvoice = TaxInvoice::where('company_id', $companyId)
             ->whereYear('tax_invoice_date', $year)
             ->whereMonth('tax_invoice_date', $month)
             ->orderBy('tax_invoice_id', 'desc')
             ->first();
-        
-        $lastNumber = $lastTaxInvoice 
-            ? (int) substr($lastTaxInvoice->tax_invoice_number, -5) 
+
+        $lastNumber = $lastTaxInvoice
+            ? (int) substr($lastTaxInvoice->tax_invoice_number, -5)
             : 0;
-        
+
         $newNumber = str_pad($lastNumber + 1, 5, '0', STR_PAD_LEFT);
-        
+
         return "FP/{$companyCode}/{$year}/{$month}/{$newNumber}";
     }
 
     /**
      * Upload file
      */
-    private function uploadFile(UploadedFile $file, string $folder): string
-    {
-        $fileName = time() . '_' . $file->getClientOriginalName();
-        return $file->storeAs($folder, $fileName, 'public');
+  public function uploadFile(int $taxInvoiceId, UploadedFile $file): TaxInvoice
+{
+    $taxInvoice = TaxInvoice::findOrFail($taxInvoiceId);
+
+    // Hapus file lama jika ada
+    if ($taxInvoice->file_path && Storage::disk('public')->exists($taxInvoice->file_path)) {
+        Storage::disk('public')->delete($taxInvoice->file_path);
     }
 
+    // Simpan file baru
+    $filename  = 'faktur_pajak_' . $taxInvoice->tax_invoice_id . '_' . time() . '.' . $file->getClientOriginalExtension();
+    $path      = $file->storeAs('tax_invoices', $filename, 'public');
+
+    $taxInvoice->update([
+        'file_path' => $path,
+        'file_name' => $file->getClientOriginalName(),
+    ]);
+
+    return $taxInvoice->fresh();
+}
     /**
      * Get statistics
      */

@@ -43,15 +43,7 @@ use App\Http\Controllers\Api\RoleMenuController;
 use App\Http\Controllers\Api\FinanceSalesExportController;
 
 use App\Http\Controllers\Api\SupplierProformaInvoiceController;
-
-
-
-
-
-
 use App\Http\Controllers\Api\InternalNotificationController;
-
-
 use App\Http\Controllers\Api\ActivityTypeController;
 use App\Http\Controllers\Api\SupplierInvoiceController;
 use App\Http\Controllers\Api\StockReturnController;
@@ -123,6 +115,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
 
+
+
     // ==================== PRODUCTS ====================
     Route::prefix('products')->group(function () {
         // List & CRUD
@@ -182,10 +176,10 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
 
-Route::middleware('auth:sanctum')->get('/finance/sales-report/export', [
-    FinanceSalesExportController::class,
-    'export',
-]);
+    Route::middleware('auth:sanctum')->get('/finance/sales-report/export', [
+        FinanceSalesExportController::class,
+        'export',
+    ]);
     Route::prefix('bank-guarantees')
         ->middleware('auth:sanctum')
         ->group(function () {
@@ -199,20 +193,20 @@ Route::middleware('auth:sanctum')->get('/finance/sales-report/export', [
             Route::get('/{id}/download', [BankGuaranteeController::class, 'download'])->whereNumber('id');
         });
 
-        Route::middleware(['auth:sanctum'])->prefix('finance')->group(function () {
+    Route::middleware(['auth:sanctum'])->prefix('finance')->group(function () {
 
-    // Laporan detail per invoice (mirror Excel DATA BASE LAPORAN)
-    Route::get('/sales-report',              [FinanceSalesReportController::class, 'getSalesReport']);
+        // Laporan detail per invoice (mirror Excel DATA BASE LAPORAN)
+        Route::get('/sales-report', [FinanceSalesReportController::class, 'getSalesReport']);
 
-    // Summary per Unit Bisnis (mirror sheet JPM Retail / DNL Online dll)
-    Route::get('/sales-report/by-unit',      [FinanceSalesReportController::class, 'getSummaryByUnit']);
+        // Summary per Unit Bisnis (mirror sheet JPM Retail / DNL Online dll)
+        Route::get('/sales-report/by-unit', [FinanceSalesReportController::class, 'getSummaryByUnit']);
 
-    // AR Aging – invoice outstanding
-    Route::get('/sales-report/outstanding',  [FinanceSalesReportController::class, 'getOutstandingInvoices']);
+        // AR Aging – invoice outstanding
+        Route::get('/sales-report/outstanding', [FinanceSalesReportController::class, 'getOutstandingInvoices']);
 
-    // Laporan pembayaran ke supplier
-    Route::get('/sales-report/supplier-payments', [FinanceSalesReportController::class, 'getSupplierPaymentReport']);
-});
+        // Laporan pembayaran ke supplier
+        Route::get('/sales-report/supplier-payments', [FinanceSalesReportController::class, 'getSupplierPaymentReport']);
+    });
 
     // ==================== QUOTATIONS ====================
     Route::prefix('quotations')->group(function () {
@@ -303,11 +297,11 @@ Route::middleware('auth:sanctum')->get('/finance/sales-report/export', [
                 ->whereNumber('id');
         });
 
-        Route::prefix('supplier-proforma-invoices')->group(function () {
-    Route::get('/', [SupplierProformaInvoiceController::class, 'index']);
-    Route::post('/', [SupplierProformaInvoiceController::class, 'store']);
-    Route::post('/{id}/issue', [SupplierProformaInvoiceController::class, 'issue']);
-});
+    Route::prefix('supplier-proforma-invoices')->group(function () {
+        Route::get('/', [SupplierProformaInvoiceController::class, 'index']);
+        Route::post('/', [SupplierProformaInvoiceController::class, 'store']);
+        Route::post('/{id}/issue', [SupplierProformaInvoiceController::class, 'issue']);
+    });
 
 
     Route::prefix('supplier-purchase-orders')->group(function () {
@@ -554,20 +548,25 @@ Route::middleware('auth:sanctum')->get('/finance/sales-report/export', [
         Route::post('/{id}/delivery-notes', [InvoiceController::class, 'createDeliveryNote']);
     });
 
-    Route::prefix('tax-invoices')->middleware(['auth:sanctum'])->group(function () {
+    Route::prefix('tax-invoices')->middleware('auth:sanctum')->group(function () {
+        // Static routes HARUS di atas wildcard {id}
+        Route::get('/statistics', [TaxInvoiceController::class, 'statistics']);
+
+        // CRUD
         Route::get('/', [TaxInvoiceController::class, 'index']);
         Route::post('/', [TaxInvoiceController::class, 'store']);
-        Route::get('/statistics', [TaxInvoiceController::class, 'statistics']);
-        Route::get('/{tax_invoice}', [TaxInvoiceController::class, 'show']);
-        Route::put('/{tax_invoice}', [TaxInvoiceController::class, 'update']);
-        Route::delete('/{tax_invoice}', [TaxInvoiceController::class, 'destroy']);
+        Route::get('/{id}', [TaxInvoiceController::class, 'show']);
+        Route::put('/{id}', [TaxInvoiceController::class, 'update']);
+        Route::delete('/{id}', [TaxInvoiceController::class, 'destroy']);
 
         // Actions
-        Route::post('/{tax_invoice}/submit', [TaxInvoiceController::class, 'submit']);
-        Route::post('/{tax_invoice}/approve', [TaxInvoiceController::class, 'approve']);
-        Route::post('/{tax_invoice}/reject', [TaxInvoiceController::class, 'reject']);
-        Route::get('/{tax_invoice}/download', [TaxInvoiceController::class, 'download']);
+        Route::post('/{id}/submit', [TaxInvoiceController::class, 'submit']);
+        Route::post('/{id}/approve', [TaxInvoiceController::class, 'approve']);   // ✅ fix
+        Route::post('/{id}/reject', [TaxInvoiceController::class, 'reject']);
+        Route::post('/{id}/upload', [TaxInvoiceController::class, 'uploadFile']);
+        Route::get('/{id}/download', [TaxInvoiceController::class, 'download']);
     });
+
 
 
 
@@ -655,36 +654,36 @@ Route::middleware('auth:sanctum')->get('/finance/sales-report/export', [
 
 
     // ==================== STOCK MOVEMENTS ====================
-  // routes/api.php
+    // routes/api.php
 // ==================== STOCK MOVEMENTS ====================
-Route::middleware('auth:sanctum')->prefix('stock-movements')->group(function () {
+    Route::middleware('auth:sanctum')->prefix('stock-movements')->group(function () {
 
-    // ✅ Static routes WAJIB di atas wildcard {id}
-    Route::get('/export',          [StockMovementController::class, 'export']);
-    Route::get('/export-report',   [StockMovementController::class, 'exportReport']);
-    Route::get('/summary',         [StockMovementController::class, 'summary']);
-    Route::get('/warehouse-report',[StockMovementController::class, 'warehouseReport']);
+        // ✅ Static routes WAJIB di atas wildcard {id}
+        Route::get('/export', [StockMovementController::class, 'export']);
+        Route::get('/export-report', [StockMovementController::class, 'exportReport']);
+        Route::get('/summary', [StockMovementController::class, 'summary']);
+        Route::get('/warehouse-report', [StockMovementController::class, 'warehouseReport']);
 
-    // ✅ Wildcard routes di bawah
-    Route::get('/',                [StockMovementController::class, 'index']);
-    Route::post('/',               [StockMovementController::class, 'store']);
-    Route::get('/batch/{batchId}', [StockMovementController::class, 'historyByBatch']);
-    Route::get('/{id}',            [StockMovementController::class, 'show']);
-    Route::put('/{id}',            [StockMovementController::class, 'update']);
-    Route::delete('/{id}',         [StockMovementController::class, 'destroy']);
-});
+        // ✅ Wildcard routes di bawah
+        Route::get('/', [StockMovementController::class, 'index']);
+        Route::post('/', [StockMovementController::class, 'store']);
+        Route::get('/batch/{batchId}', [StockMovementController::class, 'historyByBatch']);
+        Route::get('/{id}', [StockMovementController::class, 'show']);
+        Route::put('/{id}', [StockMovementController::class, 'update']);
+        Route::delete('/{id}', [StockMovementController::class, 'destroy']);
+    });
 
 
-// routes/api.php — tambahkan di dalam group auth:sanctum
-Route::prefix('stock-opname')->group(function () {
-    Route::get('/',                          [StockOpnameController::class, 'index']);
-    Route::post('/',                         [StockOpnameController::class, 'store']);
-    Route::get('/{id}',                      [StockOpnameController::class, 'show']);
-    Route::delete('/{id}',                   [StockOpnameController::class, 'destroy']);
-    Route::post('/{id}/complete',            [StockOpnameController::class, 'complete']);
-    Route::post('/{id}/approve',             [StockOpnameController::class, 'approve']);
-    Route::put('/{opnameId}/items/{itemId}', [StockOpnameController::class, 'updateItem']);
-});
+    // routes/api.php — tambahkan di dalam group auth:sanctum
+    Route::prefix('stock-opname')->group(function () {
+        Route::get('/', [StockOpnameController::class, 'index']);
+        Route::post('/', [StockOpnameController::class, 'store']);
+        Route::get('/{id}', [StockOpnameController::class, 'show']);
+        Route::delete('/{id}', [StockOpnameController::class, 'destroy']);
+        Route::post('/{id}/complete', [StockOpnameController::class, 'complete']);
+        Route::post('/{id}/approve', [StockOpnameController::class, 'approve']);
+        Route::put('/{opnameId}/items/{itemId}', [StockOpnameController::class, 'updateItem']);
+    });
 
 
     // ==================== SUPPLIERS ====================

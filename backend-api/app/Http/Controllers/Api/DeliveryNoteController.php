@@ -345,16 +345,17 @@ class DeliveryNoteController extends BaseController  // ✅ extends BaseControll
         }
     }
 
-    private function autoCreateStockOut($deliveryNote, $outDate)
-    {
-        $processedBy = Auth::id();
-        $customerId = $deliveryNote->invoice?->customer_id ?? null;
-        $stockOutRecords = [];
+   private function autoCreateStockOut($deliveryNote, $outDate)
+{
+    $processedBy = Auth::id();
+    $customerId  = $deliveryNote->invoice?->customer_id ?? null;
+    $stockOutRecords = [];
 
-        foreach ($deliveryNote->items as $dnItem) {
-            $batches = \App\Models\StockBatch::where('product_id', $dnItem->product_id)
-                ->where('company_id', $deliveryNote->company_id)
-                ->selectRaw('
+    foreach ($deliveryNote->items as $dnItem) {
+
+        $batches = \App\Models\StockBatch::where('product_id', $dnItem->product_id)
+            ->where('company_id', $deliveryNote->company_id)
+            ->selectRaw('
                 stock_batches.*,
                 COALESCE(
                     (SELECT SUM(quantity) FROM stock_opening WHERE stock_opening.batch_id = stock_batches.batch_id), 0
@@ -364,104 +365,105 @@ class DeliveryNoteController extends BaseController  // ✅ extends BaseControll
                 ) -
                 COALESCE(
                     (SELECT SUM(quantity) FROM stock_out WHERE stock_out.batch_id = stock_batches.batch_id), 0
-                )
-                AS available_qty
+                ) AS available_qty
             ')
-                ->having('available_qty', '>', 0)
-                ->orderBy('expiry_date', 'asc')
-                ->orderBy('batch_id', 'asc')
-                ->get();
+            ->having('available_qty', '>', 0)
+            ->orderBy('expiry_date', 'asc')
+            ->orderBy('batch_id', 'asc')
+            ->get();
 
-            $totalAvailable = $batches->sum('available_qty');
+        $totalAvailable = $batches->sum('available_qty');
 
-            if ($totalAvailable < $dnItem->quantity) {
-                throw new \Exception(
-                    "Stok tidak mencukupi untuk produk {$dnItem->product->product_name}. " .
-                        "Tersedia: {$totalAvailable}, Dibutuhkan: {$dnItem->quantity}"
-                );
-            }
+        if ($totalAvailable < $dnItem->quantity) {
+            throw new \Exception(
+                "Stok tidak mencukupi untuk produk {$dnItem->product->product_name}. " .
+                "Tersedia: {$totalAvailable}, Dibutuhkan: {$dnItem->quantity}"
+            );
+        }
 
-            $remaining = $dnItem->quantity;
+        $remaining = $dnItem->quantity;
 
-            foreach ($batches as $batch) {
-                if ($remaining <= 0) break;
+        foreach ($batches as $batch) {
+            if ($remaining <= 0) break;
 
-                $used = min($remaining, $batch->available_qty);
+            $used = min($remaining, $batch->available_qty);
 
-                $sellingPrice = 0;
-                if ($deliveryNote->invoice) {
-                    $invoiceItem = $deliveryNote->invoice->items()
-                        ->where('product_id', $dnItem->product_id)
-                        ->first();
-
-                    if ($invoiceItem) {
-                        $sellingPrice = is_numeric($invoiceItem->unit_price)
-                            ? (float)$invoiceItem->unit_price
-                            : (float)($dnItem->product->selling_price ?? 0);
-                    }
-                }
-
-                if ($sellingPrice == 0) {
-                    $sellingPrice = (float)($dnItem->product->selling_price ?? 0);
-                }
-
-                $purchasePrice = is_numeric($batch->purchase_price)
-                    ? (float)$batch->purchase_price
-                    : 0;
-
-                $stockOut = \App\Models\StockOut::create([
-                    'company_id' => (int)$deliveryNote->company_id,
-                    'product_id' => (int)$dnItem->product_id,
-                    'batch_id' => (int)$batch->batch_id,
-                    'customer_id' => $customerId ? (int)$customerId : null,
-                    'delivery_note_id' => (int)$deliveryNote->delivery_note_id,
-                    'transaction_type' => 'sale',
-                    'quantity' => (int)$used,
-                    'selling_price' => (string)$sellingPrice,
-                    'out_date' => $outDate,
-                    'notes' => "Auto Stock OUT dari DN {$deliveryNote->delivery_note_number}",
-                    'processed_by' => $processedBy ? (int)$processedBy : null,
-                    'receiving_condition' => 'good',
-                ]);
-
-                \App\Models\StockMovement::create([
-                    'product_id' => (int)$dnItem->product_id,
-                    'batch_id' => (int)$batch->batch_id,
-                    'movement_type' => 'OUT',
-                    'quantity' => (int)$used,
-                    'unit_cost' => (string)$purchasePrice,
-                    'total_cost' => (string)($used * $purchasePrice),
-                    'reference_id' => (int)$stockOut->stock_out_id,
-                    'reference_type' => 'stock_out',
-                    'movement_date' => $outDate,
-                    'notes' => "Auto Stock OUT dari DN {$deliveryNote->delivery_note_number}",
-                    'created_by' => $processedBy ? (int)$processedBy : null,
-                ]);
-
-                $stockOutRecords[] = $stockOut;
-                $remaining -= $used;
-
-                try {
-                    $date = \Carbon\Carbon::parse($outDate);
-                    \App\Models\EndingStock::updateEndingStock($batch->batch_id, $date->year, $date->month);
-                } catch (\Exception $e) {
-                    Log::warning("Failed to update ending stock: " . $e->getMessage());
+            $sellingPrice = 0;
+            if ($deliveryNote->invoice) {
+                $invoiceItem = $deliveryNote->invoice->items()
+                    ->where('product_id', $dnItem->product_id)
+                    ->first();
+                if ($invoiceItem) {
+                    $sellingPrice = is_numeric($invoiceItem->unit_price)
+                        ? (float) $invoiceItem->unit_price
+                        : (float) ($dnItem->product->selling_price ?? 0);
                 }
             }
 
-            if (count($stockOutRecords) > 0) {
-                try {
-                    $dnItem->update([
-                        'stock_out_id' => (int)$stockOutRecords[0]->stock_out_id
-                    ]);
-                } catch (\Exception $e) {
-                    Log::info("DN item stock_out_id update skipped: " . $e->getMessage());
-                }
+            if ($sellingPrice == 0) {
+                $sellingPrice = (float) ($dnItem->product->selling_price ?? 0);
+            }
+
+            $purchasePrice = is_numeric($batch->purchase_price)
+                ? (float) $batch->purchase_price
+                : 0;
+
+            $stockOut = \App\Models\StockOut::create([
+                'company_id'         => (int) $deliveryNote->company_id,
+                'product_id'         => (int) $dnItem->product_id,
+                'batch_id'           => (int) $batch->batch_id,
+                'customer_id'        => $customerId ? (int) $customerId : null,
+                'delivery_note_id'   => (int) $deliveryNote->delivery_note_id,
+                'transaction_type'   => 'sale',
+                'quantity'           => (int) $used,
+                'selling_price'      => (string) $sellingPrice,
+                'out_date'           => $outDate,
+                'notes'              => "Auto Stock OUT dari DN {$deliveryNote->delivery_note_number}",
+                'processed_by'       => $processedBy ? (int) $processedBy : null,
+                'receiving_condition'=> 'good',
+            ]);
+
+           \App\Models\StockMovement::create([
+    'product_id'     => (int) $dnItem->product_id,
+    'batch_id'       => (int) $batch->batch_id,
+    'movement_type'  => 'OUT',
+    'quantity'       => (int) $used,
+    'unit_cost'      => (string) $purchasePrice,
+    'reference_id'   => (int) $stockOut->stock_out_id,
+    'reference_type' => 'stock_out',
+    'movement_date'  => $outDate,
+    'notes'          => "Auto Stock OUT dari DN {$deliveryNote->delivery_note_number}",
+    'created_by'     => $processedBy ? (int) $processedBy : null,
+    'created_at'     => now(),
+    'updated_at'     => now(),
+]);
+
+
+            $stockOutRecords[] = $stockOut;
+            $remaining -= $used;
+
+            try {
+                $date = \Carbon\Carbon::parse($outDate);
+                \App\Models\EndingStock::updateEndingStock($batch->batch_id, $date->year, $date->month);
+            } catch (\Exception $e) {
+                Log::warning("Failed to update ending stock: " . $e->getMessage());
             }
         }
 
-        return $stockOutRecords;
+        if (count($stockOutRecords) > 0) {
+            try {
+                $dnItem->update([
+                    'stock_out_id' => (int) $stockOutRecords[0]->stock_out_id
+                ]);
+            } catch (\Exception $e) {
+                Log::info("DN item stock_out_id update skipped: " . $e->getMessage());
+            }
+        }
     }
+
+    return $stockOutRecords;
+}
+
 
     /**
      * ✅ FIXED: Issue method dengan proper error handling

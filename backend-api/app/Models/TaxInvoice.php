@@ -10,25 +10,30 @@ class TaxInvoice extends Model
 {
     protected $table = 'tax_invoices';
     protected $primaryKey = 'tax_invoice_id';
-    
-    protected $fillable = [
-        'company_id',
-        'invoice_id',
-        'tax_invoice_number',
-        'tax_invoice_date',
-        'tax_type',
-        'dpp_amount',
-        'tax_rate',
-        'tax_amount',
-        'status',
-        'file_path',
-        'submitted_at',
-        'submitted_by',
-        'approved_at',
-        'approved_by',
-        'notes',
-        'created_by',
-    ];
+
+  protected $fillable = [
+    'company_id',
+    'invoice_id',
+    'tax_invoice_number',
+    'tax_invoice_date',
+    'tax_type',
+    'dpp_amount',
+    'tax_rate',
+    'tax_amount',
+    'status',
+    'file_path',
+    'file_name',        // ✅ tambah
+    'submitted_at',
+    'submitted_by',
+    'approved_at',
+    'approved_by',
+    'rejected_at',      // ✅ tambah (dipakai di reject flow)
+    'rejected_by',      // ✅ tambah
+    'rejection_reason', // ✅ tambah
+    'notes',
+    'created_by',
+];
+
 
     protected $casts = [
         'tax_invoice_date' => 'date',

@@ -409,18 +409,21 @@ public function receiveGoods(Request $request, $id)
                     $batch->update(['quantity_initial' => $batch->quantity_available]);
                 }
 
-                // 4. Stock movement
-                StockMovement::create([
-                    'product_id'     => $item->product_id,
-                    'batch_id'       => $batch->batch_id,
-                    'movement_type'  => 'in',
-                    'quantity'       => $item->quantity,
-                    'unit_cost'      => $item->purchase_price,
-                    'reference_id'   => $deliveryNote->supplier_delivery_note_id,
-                    'reference_type' => 'supplier_delivery_note',
-                    'notes'          => 'Stock in from ' . $deliveryNote->delivery_note_number,
-                    'created_by'     => Auth::id(),
-                ]);
+        // Di receiveGoods(), bagian stock movement
+StockMovement::create([
+    'product_id'     => $item->product_id,
+    'batch_id'       => $batch->batch_id,
+    'movement_type'  => 'in',
+    'quantity'       => $item->quantity,
+    'unit_cost'      => $item->purchase_price,
+    'reference_id'   => $deliveryNote->supplier_delivery_note_id,
+    'reference_type' => 'supplier_delivery_note',
+    'notes'          => 'Stock in from ' . $deliveryNote->delivery_note_number,
+    'created_by'     => Auth::id(),
+    'created_at'     => now(), // ✅ tambah
+    'updated_at'     => now(), // ✅ tambah
+]);
+
 
                 // 5. Link stock_in_id ke DN item
                 $item->update(['stock_in_id' => $stockIn->stock_in_id]);
@@ -451,7 +454,6 @@ public function receiveGoods(Request $request, $id)
     'receiver_name'      => $request->receiver_name,
     'receiver_position'  => $request->receiver_position,
     'received_by'        => Auth::id(),
-    'receiver_signature' => $signaturePath, // ✅ tambah
 ]);
 
             // Update Supplier PO status

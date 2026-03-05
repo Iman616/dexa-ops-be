@@ -115,7 +115,7 @@ class InvoiceController extends BaseController  // ✅ extends BaseController
     }
 }
 
-    
+
 
     /**
      * ✅ UPDATED: Create invoice from Proforma Invoice
@@ -736,45 +736,50 @@ public function createDeliveryNote(Request $request, $id)
     /**
      * Download invoice as PDF
      */
-    public function downloadPdf(Request $request, $id)
-    {
-        try {
-            $companyId = $this->getCompanyId($request); // ✅
+   public function downloadPdf(Request $request, $id)
+{
+    try {
+        $companyId = $this->getCompanyId($request);
 
-            $invoice = Invoice::with([
-                'company',
-                'customer',
-                'items',
-                'payments' => function($q) {
-                    $q->where('status', 'success');
-                }
-            ])
-            ->where('company_id', $companyId) // ✅ guard
-            ->find($id);
+        $invoice = Invoice::with([
+            'company',
+            'customer',
+            'items.product',        // ✅ TAMBAH .product (untuk kode & brand di blade)
+            'payments' => function($q) {
+                $q->where('status', 'success');
+            },
+            'taxInvoices',          // ✅ TAMBAH (untuk taxDeductions di blade)
+            'purchase_order',       // ✅ TAMBAH (untuk poNumber di blade)
+        ])
+        ->where('company_id', $companyId)
+        ->find($id);
 
-            if (!$invoice) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Invoice tidak ditemukan'
-                ], 404);
-            }
-
-            $pdf = Pdf::loadView('pdf.invoice', [
-                'invoice' => $invoice
-            ]);
-
-            $filename = 'Invoice-' . $invoice->invoice_number . '.pdf';
-
-            return $pdf->download($filename);
-
-        } catch (\Exception $e) {
+        if (!$invoice) {
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal generate PDF',
-                'error' => $e->getMessage()
-            ], 500);
+                'message' => 'Invoice tidak ditemukan'
+            ], 404);
         }
-    }
 
-    
+        $pdf = Pdf::loadView('pdf.invoice', [
+            'invoice' => $invoice,
+            'company' => $invoice->company,  // ✅ TAMBAH pass $company ke view
+        ]);
+
+        // ✅ TAMBAH sanitize filename (hindari error karakter / atau \)
+        $filename = 'Invoice-' . str_replace(['/', '\\'], '_', $invoice->invoice_number) . '.pdf';
+
+        return $pdf->download($filename);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal generate PDF',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+}
+
+
+
 }

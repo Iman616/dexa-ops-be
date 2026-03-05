@@ -34,14 +34,28 @@ class Company extends Model
         return asset('storage/' . $this->logo_path);
     }
 
-    
+
 
     /* ================= RELATIONSHIPS ================= */
 
     /**
      * Users yang bisa akses company ini
      */
- 
+
+    // Di App\Models\Company.php
+public function getLogoBase64Attribute(): ?string
+{
+    if (!$this->logo_path) return null;
+
+    $path = storage_path('app/public/' . $this->logo_path);
+    if (!file_exists($path)) return null;
+
+    $mime = mime_content_type($path);
+    $data = base64_encode(file_get_contents($path));
+    return "data:{$mime};base64,{$data}";
+}
+
+
 
       public function users()
     {

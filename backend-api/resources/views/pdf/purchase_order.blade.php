@@ -291,10 +291,7 @@
             style="width: 14%;"
             rowspan="2"
           >Katalog/Spec</th>
-          \ <th
-            style="width: 10%;"
-            colspan="2"
-          >Jumlah</th>
+          \ <th style="width: 10%;" colspan="2">Jumlah</th>
           <th
             style="width: 16%;"
             rowspan="2"
@@ -319,8 +316,13 @@
             <td class="text-center">{{ $index + 1 }}</td>
             <td class="text-left">{{ $item->product_name }}</td>
             <td class="text-left">{{ $item->product->brand ?? '-' }}</td>
-            <td class="text-left">{{ $item->specification ?? '-' }}</td>
-            <td
+{{-- ✅ Sesudah — ambil product_code sebagai katalog, description sebagai spec --}}
+<td class="text-left">
+    {{ $item->product?->product_code ?? '-' }}
+    @if($item->product?->description)
+        <br><small style="color:#555;">{{ $item->product->description }}</small>
+    @endif
+</td>            <td
               class="text-center"
               style="border-right: none;"
             >{{ number_format($item->quantity, 0, ',', '.') }}</td>
@@ -335,27 +337,19 @@
         @endforeach
 
         <!-- Summary Rows -->
-        <tr class="summary-row">
-          <td
-            colspan="7"
-            class="text-right"
-          ><strong>Subtotal</strong></td>
-          <td class="text-right"><strong>Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($subtotal, 0, ',', '.') }}</strong></td>
-        </tr>
-        <tr class="summary-row">
-          <td
-            colspan="7"
-            class="text-right"
-          ><strong>PPN</strong></td>
-          <td class="text-right"><strong>Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($ppn, 0, ',', '.') }}</strong></td>
-        </tr>
-        <tr class="total-row">
-          <td
-            colspan="7"
-            class="text-right"
-          ><strong>Total</strong></td>
-          <td class="text-right"><strong>Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($grand_total, 0, ',', '.') }}</strong></td>
-        </tr>
+     <tr class="summary-row">
+    <td colspan="8" class="text-right"><strong>Subtotal</strong></td>
+    <td class="text-right"><strong>Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($subtotal, 0, ',', '.') }}</strong></td>
+</tr>
+<tr class="summary-row">
+    <td colspan="8" class="text-right"><strong>PPN</strong></td>
+    <td class="text-right"><strong>Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($ppn, 0, ',', '.') }}</strong></td>
+</tr>
+<tr class="total-row">
+    <td colspan="8" class="text-right"><strong>Total</strong></td>
+    <td class="text-right"><strong>Rp&nbsp;&nbsp;&nbsp;&nbsp;{{ number_format($grand_total, 0, ',', '.') }}</strong></td>
+</tr>
+
       </tbody>
     </table>
 

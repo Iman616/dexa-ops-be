@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Http\Controllers\Controller;
 use App\Models\Receipt;
 use App\Models\Payment;
 use App\Models\Invoice;
@@ -11,245 +10,232 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
 use Barryvdh\DomPDF\Facade\Pdf;
-class ReceiptController extends Controller
+
+class ReceiptController extends BaseController  // ✅ extends BaseController
 {
-    /**
-     * Display a listing of receipts
-     */
-   public function index(Request $request)
-{
-    $query = Receipt::with([
-        'company:company_id,company_name',
-        'invoice.customer',
-        'payment',
-        'createdByUser:user_id,full_name'
-    ]);
-
-    // Filter by company
-    if ($request->filled('company_id')) {
-        $query->where('company_id', $request->company_id);
-    }
-
-    // Filter by invoice
-    if ($request->filled('invoice_id')) {
-        $query->where('invoice_id', $request->invoice_id);
-    }
-
-    // Filter by payment
-    if ($request->filled('payment_id')) {
-        $query->where('payment_id', $request->payment_id);
-    }
-
-    // Filter by date range — pakai filled() bukan has()
-    // filled() = ada DAN tidak null/kosong
-    if ($request->filled('start_date')) {
-        $query->whereDate('receipt_date', '>=', $request->start_date);
-    }
-
-    if ($request->filled('end_date')) {
-        $query->whereDate('receipt_date', '<=', $request->end_date);
-    }
-
-    // Search
-    if ($request->filled('search')) {
-        $search = $request->search;
-        $query->where(function ($q) use ($search) {
-            $q->where('receipt_number', 'like', "%{$search}%")
-              ->orWhere('received_from', 'like', "%{$search}%");
-        });
-    }
-
-    // Sorting — whitelist kolom supaya aman dari SQL injection
-    $allowedSortBy = ['receipt_date', 'amount', 'receipt_number', 'created_at'];
-    $sortBy = in_array($request->get('sort_by'), $allowedSortBy)
-        ? $request->get('sort_by')
-        : 'receipt_date';
-
-    $sortOrder = $request->get('sort_order') === 'asc' ? 'asc' : 'desc';
-
-    $query->orderBy($sortBy, $sortOrder);
-
-    // Pagination
-    $perPage = (int) $request->get('per_page', 15);
-    $receipts = $query->paginate($perPage);
-
-    return response()->json([
-        'success' => true,
-        'message' => 'Receipts retrieved successfully',
-        'data' => $receipts
-    ], 200);
-}
-
-
-    /**
-     * Store a newly created receipt
-     */
-   /**
- * Store a newly created receipt
- */
-public function store(Request $request)
-{
-    $validator = Validator::make($request->all(), [
-        'company_id' => 'nullable|exists:companies,company_id',
-        'invoice_id' => 'required|exists:invoices,invoice_id',
-        'payment_id' => 'required|exists:payments,payment_id',
-        'receipt_number' => 'required|string|max:100|unique:receipts,receipt_number',
-        'receipt_date' => 'required|date',
-        'amount' => 'required|numeric|min:0.01',
-        'received_from' => 'required|string|max:255',
-        'payment_for' => 'required|string|max:500',
-        'notes' => 'nullable|string',
-    ]);
-
-    if ($validator->fails()) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Validation error',
-            'errors' => $validator->errors()
-        ], 422);
-    }
-
-    try {
-        DB::beginTransaction();
-
-        // Get company_id from invoice if not provided
-        $companyId = $request->company_id;
-        if (!$companyId) {
-            $invoice = Invoice::find($request->invoice_id);
-            $companyId = $invoice->company_id ?? null;
-        }
-
-        // ✅ FIX: Ganti issued_by jadi created_by
-        $receipt = Receipt::create([
-            'company_id' => $companyId,
-            'invoice_id' => $request->invoice_id,
-            'payment_id' => $request->payment_id,
-            'receipt_number' => $request->receipt_number,
-            'receipt_date' => $request->receipt_date,
-            'amount' => $request->amount,
-            'received_from' => $request->received_from,
-            'payment_for' => $request->payment_for,
-            'notes' => $request->notes,
-            'created_by' => Auth::id(), // ✅ CHANGE: issued_by → created_by
-        ]);
-
-        DB::commit();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Receipt created successfully',
-            'data' => $receipt->load(['invoice', 'payment', 'createdByUser'])
-        ], 201);
-
-    } catch (\Exception $e) {
-        DB::rollBack();
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to create receipt',
-            'error' => $e->getMessage()
-        ], 500);
-    }
-}
-
-/**
- * ✅ Generate receipt from payment
- */
-
-
-
-    /**
-     * Display the specified receipt
-     */
-    public function show($id)
+    /* =========================
+     * INDEX
+     * ========================= */
+    public function index(Request $request)
     {
-        $receipt = Receipt::with([
-            'company',
+        $companyId = $this->getCompanyId($request); // ✅
+
+        $query = Receipt::with([
+            'company:company_id,company_name',
             'invoice.customer',
             'payment',
-            'createdByUser'
-        ])->find($id);
+            'createdByUser:user_id,full_name',
+        ])
+        ->where('company_id', $companyId); // ✅ filter company aktif, hapus manual filter company_id dari request
 
-        if (!$receipt) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Receipt not found'
-            ], 404);
+        if ($request->filled('invoice_id')) {
+            $query->where('invoice_id', $request->invoice_id);
         }
+
+        if ($request->filled('payment_id')) {
+            $query->where('payment_id', $request->payment_id);
+        }
+
+        if ($request->filled('start_date')) {
+            $query->whereDate('receipt_date', '>=', $request->start_date);
+        }
+
+        if ($request->filled('end_date')) {
+            $query->whereDate('receipt_date', '<=', $request->end_date);
+        }
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('receipt_number', 'like', "%{$search}%")
+                  ->orWhere('received_from', 'like', "%{$search}%");
+            });
+        }
+
+        $allowedSortBy = ['receipt_date', 'amount', 'receipt_number', 'created_at'];
+        $sortBy    = in_array($request->get('sort_by'), $allowedSortBy) ? $request->get('sort_by') : 'receipt_date';
+        $sortOrder = $request->get('sort_order') === 'asc' ? 'asc' : 'desc';
+
+        $query->orderBy($sortBy, $sortOrder);
+
+        $receipts = $query->paginate((int) $request->get('per_page', 15));
 
         return response()->json([
             'success' => true,
-            'message' => 'Receipt retrieved successfully',
-            'data' => $receipt
+            'message' => 'Receipts retrieved successfully',
+            'data'    => $receipts,
         ], 200);
     }
 
-     public function downloadPdf($id)
+    /* =========================
+     * STORE
+     * ========================= */
+    public function store(Request $request)
     {
-        try {
-            $receipt = Receipt::with([
-                'company',
-                'invoice.customer',
-                'payment',
-                'createdByUser'
-            ])->find($id);
-
-            if (!$receipt) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Kwitansi tidak ditemukan'
-                ], 404);
-            }
-
-            // Load PDF view
-            $pdf = Pdf::loadView('pdf.receipt', [
-                'receipt' => $receipt
-            ]);
-
-            // Set paper size & orientation
-            $pdf->setPaper('A4', 'portrait');
-
-            // Filename
-            $filename = 'Kwitansi-' . $receipt->receipt_number . '.pdf';
-
-            // Download
-            return $pdf->download($filename);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Gagal generate PDF',
-                'error' => $e->getMessage()
-            ], 500);
-        }
-    }
-
-
-    /**
-     * Update the specified receipt
-     */
-    public function update(Request $request, $id)
-    {
-        $receipt = Receipt::find($id);
-
-        if (!$receipt) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Receipt not found'
-            ], 404);
-        }
-
         $validator = Validator::make($request->all(), [
-            'receipt_date' => 'sometimes|required|date',
-            'received_from' => 'sometimes|required|string|max:255',
-            'payment_for' => 'sometimes|required|string|max:500',
-            'notes' => 'nullable|string',
+            'invoice_id'     => 'required|exists:invoices,invoice_id',
+            'payment_id'     => 'required|exists:payments,payment_id',
+            'receipt_number' => 'required|string|max:100|unique:receipts,receipt_number',
+            'receipt_date'   => 'required|date',
+            'amount'         => 'required|numeric|min:0.01',
+            'received_from'  => 'required|string|max:255',
+            'payment_for'    => 'required|string|max:500',
+            'notes'          => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        try {
+            DB::beginTransaction();
+
+            $companyId = $this->getCompanyId($request); // ✅
+
+            // ✅ Validasi invoice milik company aktif
+            $invoice = Invoice::where('company_id', $companyId)
+                ->find($request->invoice_id);
+
+            if (!$invoice) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invoice tidak ditemukan atau bukan milik company aktif',
+                ], 404);
+            }
+
+            $receipt = Receipt::create([
+                'company_id'     => $companyId, // ✅ dari BaseController
+                'invoice_id'     => $request->invoice_id,
+                'payment_id'     => $request->payment_id,
+                'receipt_number' => $request->receipt_number,
+                'receipt_date'   => $request->receipt_date,
+                'amount'         => $request->amount,
+                'received_from'  => $request->received_from,
+                'payment_for'    => $request->payment_for,
+                'notes'          => $request->notes,
+                'created_by'     => Auth::id(),
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Receipt created successfully',
+                'data'    => $receipt->load(['invoice', 'payment', 'createdByUser']),
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to create receipt',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /* =========================
+     * SHOW
+     * ========================= */
+    public function show(Request $request, $id)  // ✅ tambah Request
+    {
+        $companyId = $this->getCompanyId($request); // ✅
+
+        $receipt = Receipt::with([
+            'company',
+            'invoice.customer',
+            'payment',
+            'createdByUser',
+        ])
+        ->where('company_id', $companyId)
+        ->find($id);
+
+        if (!$receipt) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Receipt not found',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Receipt retrieved successfully',
+            'data'    => $receipt,
+        ], 200);
+    }
+
+    /* =========================
+     * DOWNLOAD PDF
+     * ========================= */
+    public function downloadPdf(Request $request, $id)  // ✅ tambah Request
+    {
+        try {
+            $companyId = $this->getCompanyId($request); // ✅
+
+            $receipt = Receipt::with([
+                'company',
+                'invoice.customer',
+                'payment',
+                'createdByUser',
+            ])
+            ->where('company_id', $companyId)
+            ->find($id);
+
+            if (!$receipt) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Kwitansi tidak ditemukan',
+                ], 404);
+            }
+
+            $pdf = Pdf::loadView('pdf.receipt', ['receipt' => $receipt])
+                ->setPaper('A4', 'portrait');
+
+            $filename = 'Kwitansi-' . $receipt->receipt_number . '.pdf';
+
+            return $pdf->download($filename);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal generate PDF',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /* =========================
+     * UPDATE
+     * ========================= */
+    public function update(Request $request, $id)
+    {
+        $companyId = $this->getCompanyId($request); // ✅
+
+        $receipt = Receipt::where('company_id', $companyId)->find($id);
+
+        if (!$receipt) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Receipt not found',
+            ], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'receipt_date'  => 'sometimes|required|date',
+            'received_from' => 'sometimes|required|string|max:255',
+            'payment_for'   => 'sometimes|required|string|max:500',
+            'notes'         => 'nullable|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation error',
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
@@ -258,35 +244,37 @@ public function store(Request $request)
                 'receipt_date',
                 'received_from',
                 'payment_for',
-                'notes'
+                'notes',
             ]));
 
             return response()->json([
                 'success' => true,
                 'message' => 'Receipt updated successfully',
-                'data' => $receipt
+                'data'    => $receipt,
             ], 200);
 
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update receipt',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    /**
-     * Remove the specified receipt
-     */
-    public function destroy($id)
+    /* =========================
+     * DESTROY
+     * ========================= */
+    public function destroy(Request $request, $id)  // ✅ tambah Request
     {
-        $receipt = Receipt::find($id);
+        $companyId = $this->getCompanyId($request); // ✅
+
+        $receipt = Receipt::where('company_id', $companyId)->find($id);
 
         if (!$receipt) {
             return response()->json([
                 'success' => false,
-                'message' => 'Receipt not found'
+                'message' => 'Receipt not found',
             ], 404);
         }
 
@@ -295,92 +283,91 @@ public function store(Request $request)
 
             return response()->json([
                 'success' => true,
-                'message' => 'Receipt deleted successfully'
+                'message' => 'Receipt deleted successfully',
             ], 200);
 
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to delete receipt',
-                'error' => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
+    /* =========================
+     * GENERATE FROM PAYMENT
+     * ========================= */
+    public function generateFromPayment(Request $request, $paymentId)  // ✅ tambah Request
+    {
+        $companyId = $this->getCompanyId($request); // ✅
 
+        // ✅ Pastikan payment milik company aktif via invoice
+        $payment = Payment::with('invoice.customer')
+            ->whereHas('invoice', fn($q) => $q->where('company_id', $companyId))
+            ->find($paymentId);
 
-/**
- * ✅ Generate receipt from payment
- */
-public function generateFromPayment($paymentId)
-{
-    $payment = Payment::with('invoice.customer')->find($paymentId);
+        if (!$payment) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Payment tidak ditemukan atau bukan milik company aktif',
+            ], 404);
+        }
 
-    if (!$payment) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Payment tidak ditemukan'
-        ], 404);
+        if ($payment->receipt()->exists()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Kwitansi sudah ada untuk payment ini',
+            ], 409);
+        }
+
+        if ($payment->status !== 'success') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Payment harus berstatus success untuk generate kwitansi',
+            ], 422);
+        }
+
+        try {
+            DB::beginTransaction();
+
+            $lastReceipt = Receipt::where('company_id', $companyId) // ✅ scope per company
+                ->whereYear('created_at', date('Y'))
+                ->whereMonth('created_at', date('m'))
+                ->orderBy('receipt_id', 'desc')
+                ->first();
+
+            $nextNumber    = $lastReceipt ? (int) substr($lastReceipt->receipt_number, -4) + 1 : 1;
+            $receiptNumber = 'KWT-' . date('Ym') . '-' . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
+
+            $receipt = Receipt::create([
+                'company_id'     => $companyId, // ✅ dari BaseController
+                'invoice_id'     => $payment->invoice_id,
+                'payment_id'     => $payment->payment_id,
+                'receipt_number' => $receiptNumber,
+                'receipt_date'   => $payment->payment_date,
+                'amount'         => $payment->amount,
+                'received_from'  => $payment->invoice->customer->customer_name ?? 'N/A',
+                'payment_for'    => 'Pembayaran Invoice ' . $payment->invoice->invoice_number,
+                'notes'          => $payment->notes,
+                'created_by'     => Auth::id(),
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Kwitansi berhasil di-generate',
+                'data'    => $receipt->load(['invoice', 'payment', 'createdByUser']),
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal generate kwitansi',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
     }
-
-    // Check if receipt already exists
-    if ($payment->receipt()->exists()) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Kwitansi sudah ada untuk payment ini'
-        ], 409);
-    }
-
-    // Check payment status
-    if ($payment->status !== 'success') {
-        return response()->json([
-            'success' => false,
-            'message' => 'Payment harus berstatus success untuk generate kwitansi'
-        ], 422);
-    }
-
-    try {
-        DB::beginTransaction();
-
-        // Auto-generate receipt number
-        $lastReceipt = Receipt::whereYear('created_at', date('Y'))
-            ->whereMonth('created_at', date('m'))
-            ->orderBy('receipt_id', 'desc')
-            ->first();
-
-        $nextNumber = $lastReceipt ? (int)substr($lastReceipt->receipt_number, -4) + 1 : 1;
-        $receiptNumber = 'KWT-' . date('Ym') . '-' . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
-
-        // ✅ FIX: Ganti issued_by jadi created_by
-        $receipt = Receipt::create([
-            'company_id' => $payment->invoice->company_id ?? null,
-            'invoice_id' => $payment->invoice_id,
-            'payment_id' => $payment->payment_id,
-            'receipt_number' => $receiptNumber,
-            'receipt_date' => $payment->payment_date,
-            'amount' => $payment->amount,
-            'received_from' => $payment->invoice->customer->customer_name ?? 'N/A',
-            'payment_for' => 'Pembayaran Invoice ' . $payment->invoice->invoice_number,
-            'notes' => $payment->notes,
-            'created_by' => Auth::id(), // ✅ CHANGE: issued_by → created_by
-        ]);
-
-        DB::commit();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Kwitansi berhasil di-generate',
-            'data' => $receipt->load(['invoice', 'payment', 'createdByUser'])
-        ], 201);
-
-    } catch (\Exception $e) {
-        DB::rollBack();
-        return response()->json([
-            'success' => false,
-            'message' => 'Gagal generate kwitansi',
-            'error' => $e->getMessage()
-        ], 500);
-    }
-}
-
 }

@@ -218,14 +218,14 @@
   <img
       src="{{ $company->logo_base64 }}"
       style="width:750px; height:auto;"
-      alt="Logo 
+      alt="Logo
     >@endif
 </div>
 
     {{-- Garis merah vertikal --}}
     <div class="header-divider"></div>
 
- 
+
   </div>
 
   {{-- =========================================================
@@ -255,7 +255,7 @@
             </tr>
           </table>
         </td>
-       
+
       </tr>
     </table>
   </div>
@@ -306,6 +306,7 @@
       <tr>
         <th rowspan="2" style="width:28px;">No</th>
         <th rowspan="2" style="width:150px;">Jenis Barang</th>
+        <th rowspan="2" style="width:90px;">Brand</th>
         <th rowspan="2">Spesifikasi</th>
         <th colspan="2" class="th-qty">QTY</th>
         <th rowspan="2" style="width:88px;">
@@ -326,7 +327,10 @@
       <tr>
         <td class="center">{{ $index + 1 }}</td>
         <td>{{ $item->product_name }}</td>
-        <td class="center">{{ $item->product_description ?? $item->product_code }}</td>
+<td class="center">{{ $item->product?->brand ?? '-' }}</td>
+<td class="center">
+    {{ $item->product_description ?? $item->product?->product_code ?? '-' }}
+</td>
         <td class="center">{{ number_format($item->quantity, 0) }}</td>
         <td class="center">{{ $item->unit }}</td>
         <td class="right">Rp {{ number_format($item->unit_price, 0, ',', '.') }}</td>
@@ -335,46 +339,29 @@
       @endforeach
 
       {{-- Baris Subtotal --}}
-      <tr>
-        <td colspan="6" style="text-align:right; font-weight:bold; border-right:1px solid #000;">
-          Subtotal
-        </td>
-        <td class="right" style="font-weight:bold;">
-          Rp {{ number_format($subtotal, 0, ',', '.') }}
-        </td>
-      </tr>
-
-      {{-- Baris PPN --}}
-      <tr>
-        <td colspan="6" style="text-align:right; font-weight:bold; border-right:1px solid #000;">
-          PPN {{ number_format($proforma->tax_percentage, 0) }}%
-        </td>
-        <td class="right">
-          Rp {{ number_format($ppn, 0, ',', '.') }}
-        </td>
-      </tr>
-
-      {{-- Baris Diskon (opsional) --}}
-      @if(!empty($proforma->discount_amount) && $proforma->discount_amount > 0)
-      <tr>
-        <td colspan="6" style="text-align:right; font-weight:bold; border-right:1px solid #000;">
-          Diskon
-        </td>
-        <td class="right">
-          - Rp {{ number_format($proforma->discount_amount, 0, ',', '.') }}
-        </td>
-      </tr>
-      @endif
-
-      {{-- Baris Total --}}
-      <tr>
-        <td colspan="6" style="text-align:right; font-weight:bold; border-right:1px solid #000;">
-          Total
-        </td>
-        <td class="right" style="font-weight:bold;">
-          Rp {{ number_format($total, 0, ',', '.') }}
-        </td>
-      </tr>
+    <tr>
+    <td colspan="7" style="text-align:right; font-weight:bold; border-right:1px solid #000;">Subtotal</td>
+    <td class="right" style="font-weight:bold;">Rp {{ number_format($subtotal, 0, ',', '.') }}</td>
+</tr>
+<tr>
+    <td colspan="7" style="text-align:right; font-weight:bold; border-right:1px solid #000;">
+        PPN {{ number_format($proforma->tax_percentage, 0) }}%
+    </td>
+    <td class="right">Rp {{ number_format($ppn, 0, ',', '.') }}</td>
+</tr>
+@if(!empty($proforma->discount_amount) && $proforma->discount_amount > 0)
+<tr>
+    <td colspan="7" style="text-align:right; font-weight:bold; border-right:1px solid #000;">Diskon</td>
+    <td class="right">- Rp {{ number_format($proforma->discount_amount, 0, ',', '.') }}</td>
+</tr>
+@endif
+<tr>
+    <td colspan="7" style="text-align:right; font-weight:bold; border-right:1px solid #000;">Total</td>
+    <td class="right" style="font-weight:bold;">Rp {{ number_format($total, 0, ',', '.') }}</td>
+</tr>
+<tr class="terbilang-row">
+    <td colspan="8"><strong>Terbilang :</strong>&nbsp;&nbsp;{{ $terbilang ?? '' }}</td>
+</tr>
 
       {{-- Baris Terbilang --}}
       <tr class="terbilang-row">

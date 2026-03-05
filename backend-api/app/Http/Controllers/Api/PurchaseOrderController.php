@@ -604,6 +604,7 @@ public function updateStatus(Request $request, $id)
             'company',
             'customer',
             'quotation.activityType',
+             'items.product',
             'items',
             'issuedByUser',
             'tenderProject',

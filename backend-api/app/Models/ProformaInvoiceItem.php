@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * ProformaInvoiceItem Model
- * 
+ *
  * @property int $item_id
  * @property int $proforma_id
  * @property int $product_id
@@ -20,10 +20,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property float $subtotal (computed)
  * @property string|null $notes
  * @property string $created_at
- * 
+ *
  * @property-read ProformaInvoice $proformaInvoice
  * @property-read Product $product
- * 
+ *
  * @author Claude AI
  * @date 2026-01-28
  */
@@ -57,16 +57,19 @@ class ProformaInvoiceItem extends Model
      *
      * @var array<string>
      */
-    protected $fillable = [
-        'proforma_id',
-        'product_id',
-        'product_name',
-        'product_description',
-        'quantity',
-        'unit',
-        'unit_price',
-        'notes',
-    ];
+   protected $fillable = [
+    'proforma_id',
+    'product_id',
+    'product_name',
+    'product_description',  // spesifikasi
+    'product_code',         // ✅ TAMBAH — kode katalog
+    'brand',                // ✅ TAMBAH — brand/merk
+    'quantity',
+    'unit',
+    'unit_price',
+    'notes',
+];
+
 
     /**
      * The attributes that should be cast.

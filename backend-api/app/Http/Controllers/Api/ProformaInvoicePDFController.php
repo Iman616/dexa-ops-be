@@ -18,7 +18,7 @@ class ProformaInvoicePDFController extends Controller
     /* =========================
      * ✅ SHARED: Build semua data yang dibutuhkan PDF
      * ========================= */
-   private function buildProformaData(int $id): array
+    private function buildProformaData(int $id): array
     {
         $proforma = DB::table('proforma_invoices as pi')
             ->leftJoin('customers as c', 'c.customer_id', '=', 'pi.customer_id')
@@ -64,9 +64,9 @@ class ProformaInvoicePDFController extends Controller
         }
 
         // Default values
-        $proforma->payment_terms  = $proforma->payment_terms  ?? 'Net 30 days';
+        $proforma->payment_terms = $proforma->payment_terms ?? 'Net 30 days';
         $proforma->delivery_terms = $proforma->delivery_terms ?? 'FOB Destination';
-        $proforma->currency       = $proforma->currency       ?? 'IDR';
+        $proforma->currency = $proforma->currency ?? 'IDR';
 
         // Signature → base64
         $proforma->signature_image_base64 = null;
@@ -74,7 +74,7 @@ class ProformaInvoicePDFController extends Controller
             $path = storage_path('app/public/' . $proforma->signature_image);
             if (file_exists($path)) {
                 $mime = mime_content_type($path);
-                $raw  = base64_encode(file_get_contents($path));
+                $raw = base64_encode(file_get_contents($path));
                 $proforma->signature_image_base64 = "data:{$mime};base64,{$raw}";
             }
         }
@@ -83,14 +83,21 @@ class ProformaInvoicePDFController extends Controller
         $company = DB::table('companies')
             ->where('company_id', $proforma->company_id)
             ->select([
-                'company_name', 'address', 'phone', 'email',
-                'website', 'city', 'pic_name', 'logo_path',
-                'bank_name', 'bank_account',
+                'company_name',
+                'address',
+                'phone',
+                'email',
+                'website',
+                'city',
+                'pic_name',
+                'logo_path',
+                'bank_name',
+                'bank_account',
             ])
             ->first();
 
         if ($company) {
-            $company->bank_name    = $company->bank_name    ?? 'Bank Mandiri';
+            $company->bank_name = $company->bank_name ?? 'Bank Mandiri';
             $company->bank_account = $company->bank_account ?? '-';
 
             // Logo → base64
@@ -99,7 +106,7 @@ class ProformaInvoicePDFController extends Controller
                 $logoPath = storage_path('app/public/' . $company->logo_path);
                 if (file_exists($logoPath)) {
                     $mime = mime_content_type($logoPath);
-                    $raw  = base64_encode(file_get_contents($logoPath));
+                    $raw = base64_encode(file_get_contents($logoPath));
                     $company->logo_base64 = "data:{$mime};base64,{$raw}";
                 }
             }
@@ -116,24 +123,30 @@ class ProformaInvoicePDFController extends Controller
                 'pii.unit',
                 'pii.unit_price',
                 'pii.subtotal',
-                'p.product_code'
+                'p.product_code',   // ✅ ambil dari tabel products
+                'p.brand'           // ✅ ambil dari tabel products
             )
             ->where('pii.proforma_id', $id)
             ->orderBy('pii.item_id')
             ->get();
 
         // Kalkulasi
-        $subtotal    = (float) $proforma->subtotal;
+        $subtotal = (float) $proforma->subtotal;
         $dpp_lainnya = $subtotal * (11 / 12);
-        $ppn         = (float) $proforma->tax_amount;
-        $total       = (float) $proforma->total_amount;
+        $ppn = (float) $proforma->tax_amount;
+        $total = (float) $proforma->total_amount;
 
         // ✅ Terbilang dari total_amount secara dinamis
         $terbilang = $this->formatTerbilang($total);
 
         return compact(
-            'proforma', 'items', 'company',
-            'subtotal', 'dpp_lainnya', 'ppn', 'total',
+            'proforma',
+            'items',
+            'company',
+            'subtotal',
+            'dpp_lainnya',
+            'ppn',
+            'total',
             'terbilang'   // ✅ sudah masuk ke view
         );
     }
@@ -143,121 +156,139 @@ class ProformaInvoicePDFController extends Controller
      * ========================= */
 
     /* =========================
- * TERBILANG (Bahasa Indonesia)
- * ========================= */
-/* =========================
- * TERBILANG CORE (rekursif)
- * ========================= */
-private function terbilang(int $angka): string
-{
-    if ($angka === 0) return '';
+     * TERBILANG (Bahasa Indonesia)
+     * ========================= */
+    /* =========================
+     * TERBILANG CORE (rekursif)
+     * ========================= */
+    private function terbilang(int $angka): string
+    {
+        if ($angka === 0)
+            return '';
 
-    $satuan = ['', 'Satu', 'Dua', 'Tiga', 'Empat', 'Lima',
-               'Enam', 'Tujuh', 'Delapan', 'Sembilan', 'Sepuluh',
-               'Sebelas'];
+        $satuan = [
+            '',
+            'Satu',
+            'Dua',
+            'Tiga',
+            'Empat',
+            'Lima',
+            'Enam',
+            'Tujuh',
+            'Delapan',
+            'Sembilan',
+            'Sepuluh',
+            'Sebelas'
+        ];
 
-    if ($angka < 12)   return $satuan[$angka];
-    if ($angka < 20)   return $satuan[$angka - 10] . ' Belas';
-    if ($angka < 100)  return $satuan[(int)($angka / 10)] . ' Puluh ' . $this->terbilang($angka % 10);
-    if ($angka < 200)  return 'Seratus ' . $this->terbilang($angka - 100);
-    if ($angka < 1000) return $satuan[(int)($angka / 100)] . ' Ratus ' . $this->terbilang($angka % 100);
-    if ($angka < 2000) return 'Seribu ' . $this->terbilang($angka - 1000);
-    if ($angka < 1_000_000)
-        return $this->terbilang((int)($angka / 1000)) . ' Ribu ' . $this->terbilang($angka % 1000);
-    if ($angka < 1_000_000_000)
-        return $this->terbilang((int)($angka / 1_000_000)) . ' Juta ' . $this->terbilang($angka % 1_000_000);
-    if ($angka < 1_000_000_000_000)
-        return $this->terbilang((int)($angka / 1_000_000_000)) . ' Miliar ' . $this->terbilang($angka % 1_000_000_000);
+        if ($angka < 12)
+            return $satuan[$angka];
+        if ($angka < 20)
+            return $satuan[$angka - 10] . ' Belas';
+        if ($angka < 100)
+            return $satuan[(int) ($angka / 10)] . ' Puluh ' . $this->terbilang($angka % 10);
+        if ($angka < 200)
+            return 'Seratus ' . $this->terbilang($angka - 100);
+        if ($angka < 1000)
+            return $satuan[(int) ($angka / 100)] . ' Ratus ' . $this->terbilang($angka % 100);
+        if ($angka < 2000)
+            return 'Seribu ' . $this->terbilang($angka - 1000);
+        if ($angka < 1_000_000)
+            return $this->terbilang((int) ($angka / 1000)) . ' Ribu ' . $this->terbilang($angka % 1000);
+        if ($angka < 1_000_000_000)
+            return $this->terbilang((int) ($angka / 1_000_000)) . ' Juta ' . $this->terbilang($angka % 1_000_000);
+        if ($angka < 1_000_000_000_000)
+            return $this->terbilang((int) ($angka / 1_000_000_000)) . ' Miliar ' . $this->terbilang($angka % 1_000_000_000);
 
-    return $this->terbilang((int)($angka / 1_000_000_000_000)) . ' Triliun ' . $this->terbilang($angka % 1_000_000_000_000);
-}
-
-/* =========================
- * FORMAT TERBILANG FINAL
- * Support desimal → Sen
- * ========================= */
-private function formatTerbilang(float $amount): string
-{
-    // Pisah rupiah dan sen
-    $rounded = round($amount, 2);
-    $rupiah  = (int) floor($rounded);
-    $sen     = (int) round(($rounded - $rupiah) * 100);
-
-    // Bagian Rupiah
-    $result = trim($this->terbilang($rupiah));
-    $result = preg_replace('/\s+/', ' ', $result); // hapus double space
-    $result = trim($result) . ' Rupiah';
-
-    // Bagian Sen (jika ada)
-    if ($sen > 0) {
-        $senStr = trim($this->terbilang($sen));
-        $senStr = preg_replace('/\s+/', ' ', $senStr);
-        $result .= ' ' . trim($senStr) . ' Sen';
+        return $this->terbilang((int) ($angka / 1_000_000_000_000)) . ' Triliun ' . $this->terbilang($angka % 1_000_000_000_000);
     }
 
-    return $result;
-}
+    /* =========================
+     * FORMAT TERBILANG FINAL
+     * Support desimal → Sen
+     * ========================= */
+    private function formatTerbilang(float $amount): string
+    {
+        // Pisah rupiah dan sen
+        $rounded = round($amount, 2);
+        $rupiah = (int) floor($rounded);
+        $sen = (int) round(($rounded - $rupiah) * 100);
 
+        // Bagian Rupiah
+        $result = trim($this->terbilang($rupiah));
+        $result = preg_replace('/\s+/', ' ', $result); // hapus double space
+        $result = trim($result) . ' Rupiah';
 
-  public function generate($id)
-{
-    try {
-        $data = $this->buildProformaData((int) $id);
-
-        if (isset($data['error'])) {
-            return response()->json(['success' => false, 'message' => $data['error']], 404);
+        // Bagian Sen (jika ada)
+        if ($sen > 0) {
+            $senStr = trim($this->terbilang($sen));
+            $senStr = preg_replace('/\s+/', ' ', $senStr);
+            $result .= ' ' . trim($senStr) . ' Sen';
         }
 
-        $filename = $this->safeFilename($data['proforma']->proforma_number);
-
-        $pdf = Pdf::loadView('pdf.proforma-invoice', $data)
-            ->setPaper('A4', 'portrait')
-            ->setOption('isHtml5ParserEnabled', false) // ✅ Matikan, lebih cepat
-            ->setOption('isRemoteEnabled', false)      // ✅ MATIKAN — ini penyebab utama lambat
-            ->setOption('enable_php', false)           // ✅ Tidak perlu
-            ->setOption('dpi', 96)                     // ✅ Default 96 cukup untuk PDF
-            ->setOption('defaultFont', 'Arial');       // ✅ Paksa font bawaan
-
-        return $pdf->stream("Proforma_Invoice_{$filename}.pdf");
-
-    } catch (Exception $e) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Error generating PDF',
-            'error'   => $e->getMessage(),
-            'line'    => $e->getLine()
-        ], 500);
+        return $result;
     }
-}
 
-public function download($id)
-{
-    try {
-        $data = $this->buildProformaData((int) $id);
 
-        if (isset($data['error'])) {
-            return response()->json(['success' => false, 'message' => $data['error']], 404);
+    public function generate($id)
+    {
+        try {
+            $data = $this->buildProformaData((int) $id);
+
+            if (isset($data['error'])) {
+                return response()->json(['success' => false, 'message' => $data['error']], 404);
+            }
+
+            $filename = $this->safeFilename($data['proforma']->proforma_number);
+
+            $pdf = Pdf::loadView('pdf.proforma-invoice', $data)
+                ->setPaper('A4', 'portrait')
+                ->setOption('isHtml5ParserEnabled', false) // ✅ Matikan, lebih cepat
+                ->setOption('isRemoteEnabled', false)      // ✅ MATIKAN — ini penyebab utama lambat
+                ->setOption('enable_php', false)           // ✅ Tidak perlu
+                ->setOption('dpi', 96)                     // ✅ Default 96 cukup untuk PDF
+                ->setOption('defaultFont', 'Arial');       // ✅ Paksa font bawaan
+
+            return $pdf->stream("Proforma_Invoice_{$filename}.pdf");
+
+        } catch (Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error generating PDF',
+                'error' => $e->getMessage(),
+                'line' => $e->getLine()
+            ], 500);
         }
-
-        $filename = $this->safeFilename($data['proforma']->proforma_number);
-
-        $pdf = Pdf::loadView('pdf.proforma-invoice', $data)
-            ->setPaper('A4', 'portrait')
-            ->setOption('isHtml5ParserEnabled', false)
-            ->setOption('isRemoteEnabled', false)
-            ->setOption('enable_php', false)
-            ->setOption('dpi', 96)
-            ->setOption('defaultFont', 'Arial');
-
-        return $pdf->download("Proforma_Invoice_{$filename}.pdf");
-
-    } catch (Exception $e) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Error downloading PDF',
-            'error'   => $e->getMessage()
-        ], 500);
     }
-}
+
+    public function download($id)
+    {
+        try {
+            $data = $this->buildProformaData((int) $id);
+
+            if (isset($data['error'])) {
+                return response()->json(['success' => false, 'message' => $data['error']], 404);
+            }
+
+            $filename = $this->safeFilename($data['proforma']->proforma_number);
+
+            $pdf = Pdf::loadView('pdf.proforma-invoice', $data)
+                ->setPaper('A4', 'portrait')
+                ->setOption('isHtml5ParserEnabled', false)
+                ->setOption('isRemoteEnabled', false)
+                ->setOption('enable_php', false)
+                ->setOption('dpi', 96)
+                ->setOption('defaultFont', 'Arial');
+
+            return $pdf->download("Proforma_Invoice_{$filename}.pdf");
+
+        } catch (Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error downloading PDF',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 
 }

@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Http\Controllers\Controller;
 use App\Models\Payment;
 use App\Models\Invoice;
 use Illuminate\Http\Request;
@@ -11,104 +10,111 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 
-class PaymentController extends Controller
+class PaymentController extends BaseController  // ✅ extends BaseController
 {
-  public function index(Request $request)
-{
-    try {
-        $query = Payment::with([
-            'invoice.customer',
-            'receipt',
-            'createdByUser:user_id,full_name',
-            'approvedByUser:user_id,full_name',
-            'cancelledByUser:user_id,full_name'
-        ]);
+    /* =========================
+     * INDEX
+     * ========================= */
+    public function index(Request $request)
+    {
+        try {
+            $companyId = $this->getCompanyId($request); // ✅
 
-        if ($request->search) {
-            $query->where(function($q) use ($request) {
-                $q->where('payment_number', 'LIKE', "%{$request->search}%")
-                  ->orWhere('reference_number', 'LIKE', "%{$request->search}%")
-                  ->orWhereHas('invoice', function($q2) use ($request) {
-                      $q2->where('invoice_number', 'LIKE', "%{$request->search}%");
-                  });
-            });
+            $query = Payment::with([
+                'invoice.customer',
+                'receipt',
+                'createdByUser:user_id,full_name',
+                'approvedByUser:user_id,full_name',
+                'cancelledByUser:user_id,full_name',
+            ])
+            // ✅ Filter hanya payment milik company aktif via invoice
+            ->whereHas('invoice', fn($q) => $q->where('company_id', $companyId));
+
+            if ($request->search) {
+                $query->where(function ($q) use ($request) {
+                    $q->where('payment_number', 'LIKE', "%{$request->search}%")
+                      ->orWhere('reference_number', 'LIKE', "%{$request->search}%")
+                      ->orWhereHas('invoice', fn($q2) =>
+                          $q2->where('invoice_number', 'LIKE', "%{$request->search}%")
+                      );
+                });
+            }
+
+            if ($request->invoice_id) {
+                $query->where('invoice_id', $request->invoice_id);
+            }
+
+            if ($request->status) {
+                $query->where('status', $request->status);
+            }
+
+            if ($request->payment_method) {
+                $query->where('payment_method', $request->payment_method);
+            }
+
+            if ($request->start_date && $request->end_date) {
+                $query->whereBetween('payment_date', [$request->start_date, $request->end_date]);
+            }
+
+            $query->orderByRaw('COALESCE(updated_at, created_at) DESC');
+
+            $payments = $query->paginate($request->per_page ?? 15);
+
+            return response()->json(['success' => true, 'data' => $payments], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch payments',
+                'error'   => $e->getMessage(),
+            ], 500);
         }
-
-        if ($request->invoice_id) {
-            $query->where('invoice_id', $request->invoice_id);
-        }
-
-        if ($request->status) {
-            $query->where('status', $request->status);
-        }
-
-        if ($request->payment_method) {
-            $query->where('payment_method', $request->payment_method);
-        }
-
-        if ($request->start_date && $request->end_date) {
-            $query->whereBetween('payment_date', [$request->start_date, $request->end_date]);
-        }
-
-        // ⭐ Tampilkan data terbaru / update paling atas
-        $query->orderByRaw('COALESCE(updated_at, created_at) DESC');
-
-        $perPage  = $request->per_page ?? 15;
-        $payments = $query->paginate($perPage);
-
-        return response()->json([
-            'success' => true,
-            'data' => $payments
-        ], 200);
-
-    } catch (\Exception $e) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to fetch payments',
-            'error'   => $e->getMessage()
-        ], 500);
     }
-}
 
-
+    /* =========================
+     * STORE
+     * ========================= */
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'invoice_id'       => 'required|exists:invoices,invoice_id',
-            'payment_type'     => 'nullable|in:dp,installment,full',
-            'amount'           => 'required|numeric|min:1',
-            'payment_date'     => 'required|date',
-            'payment_method'   => 'required|in:cash,transfer,va,ewallet,credit_card,debit_card,cheque,other',
-            'bank_name'        => 'nullable|string|max:100',
-            'account_number'   => 'nullable|string|max:100',
-            'account_holder'   => 'nullable|string|max:255',
-            'reference_number' => 'nullable|string|max:100',
-            'gateway_reference'=> 'nullable|string|max:255',
-            'notes'            => 'nullable|string',
-            'proof_file'       => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:5120',
+            'invoice_id'        => 'required|exists:invoices,invoice_id',
+            'payment_type'      => 'nullable|in:dp,installment,full',
+            'amount'            => 'required|numeric|min:1',
+            'payment_date'      => 'required|date',
+            'payment_method'    => 'required|in:cash,transfer,va,ewallet,credit_card,debit_card,cheque,other',
+            'bank_name'         => 'nullable|string|max:100',
+            'account_number'    => 'nullable|string|max:100',
+            'account_holder'    => 'nullable|string|max:255',
+            'reference_number'  => 'nullable|string|max:100',
+            'gateway_reference' => 'nullable|string|max:255',
+            'notes'             => 'nullable|string',
+            'proof_file'        => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:5120',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors'  => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
         DB::beginTransaction();
         try {
-            // ✅ Load payments sekalian supaya remaining_amount accessor akurat
-            $invoice = Invoice::with('payments')->find($request->invoice_id);
+            $companyId = $this->getCompanyId($request); // ✅
+
+            // ✅ Pastikan invoice milik company aktif
+            $invoice = Invoice::with('payments')
+                ->where('company_id', $companyId)
+                ->find($request->invoice_id);
 
             if (!$invoice) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Invoice tidak ditemukan'
+                    'message' => 'Invoice tidak ditemukan atau bukan milik company aktif',
                 ], 404);
             }
 
-            // ✅ Hanya hitung dari payment SUCCESS (bukan pending)
             $totalPaidSuccess = $invoice->payments
                 ->where('status', 'success')
                 ->sum('amount');
@@ -120,12 +126,11 @@ class PaymentController extends Controller
                     'message' => 'Jumlah pembayaran melebihi sisa tagihan',
                     'data'    => [
                         'remaining_amount' => $remainingAmount,
-                        'requested_amount' => $request->amount
-                    ]
+                        'requested_amount' => $request->amount,
+                    ],
                 ], 422);
             }
 
-            // Handle file upload
             $proofFilePath = null;
             if ($request->hasFile('proof_file')) {
                 $file          = $request->file('proof_file');
@@ -133,7 +138,6 @@ class PaymentController extends Controller
                 $proofFilePath = $file->storeAs('payment_proofs', $filename, 'public');
             }
 
-            // Auto-generate payment number
             $lastPayment = Payment::whereNotNull('payment_number')
                 ->orderBy('payment_id', 'desc')
                 ->lockForUpdate()
@@ -148,7 +152,7 @@ class PaymentController extends Controller
                 'payment_type'      => $request->payment_type,
                 'amount'            => $request->amount,
                 'payment_date'      => $request->payment_date,
-                'status'            => 'pending', // ✅ Selalu pending, baru jadi success setelah approve
+                'status'            => 'pending',
                 'payment_method'    => $request->payment_method,
                 'bank_name'         => $request->bank_name,
                 'account_number'    => $request->account_number,
@@ -160,13 +164,12 @@ class PaymentController extends Controller
                 'created_by'        => Auth::id(),
             ]);
 
-            // ✅ TIDAK update invoice di sini — hanya update setelah approve
             DB::commit();
 
             return response()->json([
                 'success' => true,
                 'message' => 'Payment berhasil dibuat, menunggu approval',
-                'data'    => $payment->load(['invoice.customer', 'createdByUser'])
+                'data'    => $payment->load(['invoice.customer', 'createdByUser']),
             ], 201);
 
         } catch (\Exception $e) {
@@ -174,26 +177,33 @@ class PaymentController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal membuat payment',
-                'error'   => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    public function show($id)
+    /* =========================
+     * SHOW
+     * ========================= */
+    public function show(Request $request, $id)  // ✅ tambah Request
     {
         try {
+            $companyId = $this->getCompanyId($request); // ✅
+
             $payment = Payment::with([
                 'invoice.customer',
                 'receipt',
                 'createdByUser',
                 'approvedByUser',
-                'cancelledByUser'
-            ])->find($id);
+                'cancelledByUser',
+            ])
+            ->whereHas('invoice', fn($q) => $q->where('company_id', $companyId))
+            ->find($id);
 
             if (!$payment) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Payment tidak ditemukan'
+                    'message' => 'Payment tidak ditemukan',
                 ], 404);
             }
 
@@ -203,26 +213,32 @@ class PaymentController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to fetch payment',
-                'error'   => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
+    /* =========================
+     * UPDATE
+     * ========================= */
     public function update(Request $request, $id)
     {
-        $payment = Payment::find($id);
+        $companyId = $this->getCompanyId($request); // ✅
+
+        $payment = Payment::whereHas('invoice', fn($q) => $q->where('company_id', $companyId))
+            ->find($id);
 
         if (!$payment) {
             return response()->json([
                 'success' => false,
-                'message' => 'Payment tidak ditemukan'
+                'message' => 'Payment tidak ditemukan',
             ], 404);
         }
 
         if ($payment->status !== 'pending') {
             return response()->json([
                 'success' => false,
-                'message' => 'Hanya payment dengan status pending yang bisa diupdate'
+                'message' => 'Hanya payment dengan status pending yang bisa diupdate',
             ], 422);
         }
 
@@ -244,7 +260,7 @@ class PaymentController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors'  => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
@@ -255,8 +271,8 @@ class PaymentController extends Controller
                 if ($payment->proof_file_path && Storage::disk('public')->exists($payment->proof_file_path)) {
                     Storage::disk('public')->delete($payment->proof_file_path);
                 }
-                $file                         = $request->file('proof_file');
-                $filename                     = time() . '_' . $file->getClientOriginalName();
+                $file                          = $request->file('proof_file');
+                $filename                      = time() . '_' . $file->getClientOriginalName();
                 $updateData['proof_file_path'] = $file->storeAs('payment_proofs', $filename, 'public');
             }
 
@@ -265,33 +281,39 @@ class PaymentController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Payment berhasil diupdate',
-                'data'    => $payment->load(['invoice', 'receipt'])
+                'data'    => $payment->load(['invoice', 'receipt']),
             ], 200);
 
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal update payment',
-                'error'   => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    public function destroy($id)
+    /* =========================
+     * DESTROY
+     * ========================= */
+    public function destroy(Request $request, $id)  // ✅ tambah Request
     {
-        $payment = Payment::find($id);
+        $companyId = $this->getCompanyId($request); // ✅
+
+        $payment = Payment::whereHas('invoice', fn($q) => $q->where('company_id', $companyId))
+            ->find($id);
 
         if (!$payment) {
             return response()->json([
                 'success' => false,
-                'message' => 'Payment tidak ditemukan'
+                'message' => 'Payment tidak ditemukan',
             ], 404);
         }
 
         if ($payment->receipt()->exists()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Tidak bisa menghapus payment yang sudah memiliki kwitansi'
+                'message' => 'Tidak bisa menghapus payment yang sudah memiliki kwitansi',
             ], 409);
         }
 
@@ -304,36 +326,40 @@ class PaymentController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Payment berhasil dihapus'
+                'message' => 'Payment berhasil dihapus',
             ], 200);
 
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal menghapus payment',
-                'error'   => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    /**
-     * ✅ FIXED: Approve payment + update invoice payment status
-     */
+    /* =========================
+     * APPROVE
+     * ========================= */
     public function approve(Request $request, $id)
     {
-        $payment = Payment::with('invoice.payments')->find($id);
+        $companyId = $this->getCompanyId($request); // ✅
+
+        $payment = Payment::with('invoice.payments')
+            ->whereHas('invoice', fn($q) => $q->where('company_id', $companyId))
+            ->find($id);
 
         if (!$payment) {
             return response()->json([
                 'success' => false,
-                'message' => 'Payment tidak ditemukan'
+                'message' => 'Payment tidak ditemukan',
             ], 404);
         }
 
         if ($payment->status !== 'pending') {
             return response()->json([
                 'success' => false,
-                'message' => 'Hanya payment pending yang bisa di-approve'
+                'message' => 'Hanya payment pending yang bisa di-approve',
             ], 422);
         }
 
@@ -349,7 +375,6 @@ class PaymentController extends Controller
                     : $payment->notes,
             ]);
 
-            // ✅ FIX: Update invoice payment status setelah approve
             if ($payment->invoice) {
                 $payment->invoice->updatePaymentStatus();
             }
@@ -359,7 +384,7 @@ class PaymentController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Payment berhasil di-approve',
-                'data'    => $payment->fresh(['invoice.customer', 'receipt'])
+                'data'    => $payment->fresh(['invoice.customer', 'receipt']),
             ], 200);
 
         } catch (\Exception $e) {
@@ -367,36 +392,40 @@ class PaymentController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal approve payment',
-                'error'   => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    /**
-     * ✅ FIXED: Cancel payment + recalculate invoice payment status
-     */
+    /* =========================
+     * CANCEL
+     * ========================= */
     public function cancel(Request $request, $id)
     {
-        $payment = Payment::with('invoice.payments')->find($id);
+        $companyId = $this->getCompanyId($request); // ✅
+
+        $payment = Payment::with('invoice.payments')
+            ->whereHas('invoice', fn($q) => $q->where('company_id', $companyId))
+            ->find($id);
 
         if (!$payment) {
             return response()->json([
                 'success' => false,
-                'message' => 'Payment tidak ditemukan'
+                'message' => 'Payment tidak ditemukan',
             ], 404);
         }
 
         if (in_array($payment->status, ['cancelled', 'failed'])) {
             return response()->json([
                 'success' => false,
-                'message' => 'Payment sudah dibatalkan atau gagal'
+                'message' => 'Payment sudah dibatalkan atau gagal',
             ], 422);
         }
 
         if ($payment->receipt()->exists()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Tidak bisa membatalkan payment yang sudah memiliki kwitansi'
+                'message' => 'Tidak bisa membatalkan payment yang sudah memiliki kwitansi',
             ], 409);
         }
 
@@ -408,7 +437,7 @@ class PaymentController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors'  => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
@@ -416,13 +445,12 @@ class PaymentController extends Controller
             DB::beginTransaction();
 
             $payment->update([
-                'status'               => 'cancelled',
-                'cancelled_by'         => Auth::id(),
-                'cancelled_at'         => now(),
-                'cancellation_reason'  => $request->cancellation_reason,
+                'status'              => 'cancelled',
+                'cancelled_by'        => Auth::id(),
+                'cancelled_at'        => now(),
+                'cancellation_reason' => $request->cancellation_reason,
             ]);
 
-            // ✅ FIX: Recalculate invoice status setelah cancel
             if ($payment->invoice) {
                 $payment->invoice->updatePaymentStatus();
             }
@@ -432,7 +460,7 @@ class PaymentController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Payment berhasil dibatalkan',
-                'data'    => $payment->fresh(['invoice'])
+                'data'    => $payment->fresh(['invoice']),
             ], 200);
 
         } catch (\Exception $e) {
@@ -440,19 +468,25 @@ class PaymentController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal membatalkan payment',
-                'error'   => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    public function generateReceipt($id)
+    /* =========================
+     * GENERATE RECEIPT
+     * ========================= */
+    public function generateReceipt(Request $request, $id)  // ✅ tambah Request
     {
-        $payment = Payment::find($id);
+        $companyId = $this->getCompanyId($request); // ✅
+
+        $payment = Payment::whereHas('invoice', fn($q) => $q->where('company_id', $companyId))
+            ->find($id);
 
         if (!$payment) {
             return response()->json([
                 'success' => false,
-                'message' => 'Payment tidak ditemukan'
+                'message' => 'Payment tidak ditemukan',
             ], 404);
         }
 
@@ -461,33 +495,40 @@ class PaymentController extends Controller
         if (!$result['success']) {
             return response()->json([
                 'success' => false,
-                'message' => $result['message']
+                'message' => $result['message'],
             ], 422);
         }
 
         return response()->json([
             'success' => true,
             'message' => 'Kwitansi berhasil di-generate',
-            'data'    => $result['data']
+            'data'    => $result['data'],
         ], 201);
     }
 
+    /* =========================
+     * SUMMARY
+     * ========================= */
     public function summary(Request $request)
     {
         try {
-            $query = Payment::where('status', 'success');
+            $companyId = $this->getCompanyId($request); // ✅
+
+            // ✅ Filter via invoice.company_id
+            $base = Payment::where('status', 'success')
+                ->whereHas('invoice', fn($q) => $q->where('company_id', $companyId));
 
             if ($request->start_date && $request->end_date) {
-                $query->whereBetween('payment_date', [$request->start_date, $request->end_date]);
+                $base->whereBetween('payment_date', [$request->start_date, $request->end_date]);
             }
 
             $summary = [
-                'total_transactions' => (clone $query)->count(),
-                'total_amount'       => (clone $query)->sum('amount'),
-                'by_method'          => (clone $query)
+                'total_transactions' => (clone $base)->count(),
+                'total_amount'       => (clone $base)->sum('amount'),
+                'by_method'          => (clone $base)
                     ->select('payment_method', DB::raw('COUNT(*) as count'), DB::raw('SUM(amount) as total'))
                     ->groupBy('payment_method')
-                    ->get()
+                    ->get(),
             ];
 
             return response()->json(['success' => true, 'data' => $summary], 200);
@@ -496,7 +537,7 @@ class PaymentController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to get summary',
-                'error'   => $e->getMessage()
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }

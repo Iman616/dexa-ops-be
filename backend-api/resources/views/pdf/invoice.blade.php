@@ -71,18 +71,13 @@
     /* ── Tax Calculation ── */
     $taxRate   = (float) ($invoice->tax_percentage ?? 11);
 
-    if ($usePpn && $isDppNilaiLain) {
-        // ✅ DPP Nilai Lain — gunakan EXACT fraction, BUKAN 0.9167
-        // 0.9167 → 190,674  (selisih 7 rupiah)
-        // 11/12  → 190,667  (benar ✓)
+      if ($usePpn && $isDppNilaiLain) {
         $dppLainnya = round($subtotal * ($taxRate / ($taxRate + 1)));
-        $ppnAmount  = round($dppLainnya * (($taxRate + 1) / 100));
+        $ppnAmount  = round($dppLainnya * ($taxRate / 100)); // ✅ bukan ($taxRate + 1)
     } else {
-        // Non-PPN: tidak ada pajak, atau pajak standard
         $dppLainnya = 0;
         $ppnAmount  = $usePpn ? round($subtotal * ($taxRate / 100)) : 0;
     }
-
     $totalWithTax = $subtotal + $ppnAmount;
 
     /* ── Payment & Deductions ── */
@@ -147,23 +142,22 @@
 <table>
     <tr>
         <td width="50%">
-            <strong>Bill To:</strong><br>
+            <strong>Kepada:</strong><br>
             {{ $invoice->customer->customer_name }}<br>
             {{ $invoice->customer->address }}<br>
-            Phone: {{ $invoice->customer->phone }}<br>
+            Telepon: {{ $invoice->customer->phone }}<br>
             Email: {{ $invoice->customer->email }}
         </td>
         <td width="50%">
             <strong>ID:</strong> {{ $invoiceId }}<br>
-            <strong>PO No.:</strong> {{ $poNumber }}<br>
-            <strong>Invoice Date:</strong> {{ $invoice->invoice_date->format('d/m/Y') }}<br>
-            <strong>Due Date:</strong> {{ $invoice->due_date->format('d/m/Y') }}<br>
-            <strong>Payment Status:</strong> {{ $invoice->payment_status_label }}<br>
-            <strong>Currency:</strong> {{ $currency }}
+            <strong>No. PO:</strong> {{ $poNumber }}<br>
+            <strong>Tanggal Invoice:</strong> {{ $invoice->invoice_date->format('d/m/Y') }}<br>
+            <strong>Jatuh Tempo:</strong> {{ $invoice->due_date->format('d/m/Y') }}<br>
+            <strong>Status Pembayaran:</strong> {{ $invoice->payment_status_label }}<br>
+            <strong>Mata Uang:</strong> {{ $currency }}
         </td>
     </tr>
 </table>
-
 {{-- ══ Items Table ══ --}}
 <table>
     <thead>
@@ -231,8 +225,7 @@
         </tr>
 
         <tr>
-            <td><strong>Total Pajak (PPN {{ round($taxRate + 1) }}%)</strong></td>
-            <td class="text-right">: Rp &nbsp;{{ $fmt($ppnAmount) }}</td>
+<td><strong>Total Pajak (PPN {{ round($taxRate) }}%)</strong></td>            <td class="text-right">: Rp &nbsp;{{ $fmt($ppnAmount) }}</td>
         </tr>
         @endif
 

@@ -36,13 +36,12 @@
       display: table;
     }
     .header-logo-cell {
-      display: table-cell;
-      width: 110px;
-      vertical-align: middle;
-      padding-right: 12px;
+      text-align: center;
+      margin-bottom: 20px;
+      padding-bottom: 10px;
     }
     .header-logo-cell img {
-      max-width: 100px;
+      max-width: 100%;
       height: auto;
     }
     .header-info-cell {
@@ -267,45 +266,16 @@
   <div class="header-table">
 
     {{-- Logo --}}
-    <div class="header-logo-cell">
-      @if($deliveryNote->company->logo_base64)
-        <img src="{{ $deliveryNote->company->logo_base64 }}"
-             alt="Logo {{ $deliveryNote->company->company_name }}">
-      @endif
-    </div>
+   <div class="header-logo-cell">
+    @if($deliveryNote->company->logo_base64)
+      <img src="{{ $deliveryNote->company->logo_base64 }}" alt="Logo {{ $deliveryNote->company->company_name }}">
+    @endif
+  </div>
 
     {{-- Info perusahaan --}}
     <div class="header-info-cell">
-      <div class="header-company-name">{{ $deliveryNote->company->company_name }}</div>
-
-      @if($deliveryNote->company->tagline ?? null)
-        <div class="header-tagline">{{ $deliveryNote->company->tagline }}</div>
-      @endif
-
-      <div class="header-detail">
-        {{ $deliveryNote->company->address }}<br>
-        @if($deliveryNote->company->phone)
-          Telp/Fax : {{ $deliveryNote->company->phone }}
-          @if($deliveryNote->company->whatsapp)
-            &nbsp; WA : {{ $deliveryNote->company->whatsapp }}
-          @endif
-          <br>
-        @endif
-        @if($deliveryNote->company->email)
-          Email : {{ $deliveryNote->company->email }}<br>
-        @endif
-        @if($deliveryNote->company->website)
-          Website : {{ $deliveryNote->company->website }}
-        @endif
-      </div>
     </div>
 
-    {{-- NPWP pojok kanan bawah header --}}
-    @if($deliveryNote->company->npwp)
-    <div class="header-npwp">
-      NPWP : {{ $deliveryNote->company->npwp }}
-    </div>
-    @endif
 
   </div>{{-- end .header-table --}}
 
@@ -366,20 +336,26 @@
   <table class="items-table">
     <thead>
       <tr style="background-color:#f2f2f2;">
-        <th rowspan="1" style="width:30px;">No</th>
-        <th>Nama Barang</th>
-        <th style="width:130px;">Spesifikasi</th>
-        <th colspan="2" style="width:90px;">Jumlah</th>
-        <th style="width:100px;">Keterangan</th>
+   <th style="width:4%;">No</th>
+<th style="width:25%;">Nama Barang</th>
+<th style="width:12%;">Brand / Merk</th>
+<th style="width:14%;">Katalog/Kode</th>
+<th colspan="2" style="width:12%;">Jumlah</th>
+<th style="width:10%;">Keterangan</th>
       </tr>
     </thead>
     <tbody>
       @foreach($deliveryNote->items as $i => $item)
       <tr>
         <td>{{ $i + 1 }}</td>
-        <td class="text-left">{{ $item->product_name }}</td>
-        <td>{{ $item->product_code ?? '' }}</td>
-        <td style="width:42px;">{{ number_format($item->quantity) }}</td>
+<td class="text-left">{{ $item->product_name }}</td>
+<td>{{ $item->product?->brand ?? '-' }}</td>
+<td>
+  {{ $item->product_code ?? $item->product?->product_code ?? '-' }}
+  @if($item->product?->description)
+    <br><small style="color:#555; font-size:8pt;">{{ $item->product->description }}</small>
+  @endif
+</td>        <td style="width:42px;">{{ number_format($item->quantity) }}</td>
         <td style="width:48px;">{{ $item->unit }}</td>
         <td>{{ $item->notes ?? '' }}</td>
       </tr>

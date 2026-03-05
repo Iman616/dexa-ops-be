@@ -14,8 +14,8 @@ class QuotationPDFController extends Controller
 public function generate($id)
 {
     $quotation = Quotation::with([
-        'company', 
-        'customer', 
+        'company',
+        'customer',
         'items.product', // ✅ Pastikan ini ada
         'createdByUser',
         'issuedByUser'
@@ -49,12 +49,27 @@ public function generate($id)
         'ppn' => $ppn,
         'total' => $total,
     ];
+$taxRate = \App\Models\Tax::where('is_active', true)
+    ->where('tax_name', 'LIKE', '%PPN%')
+    ->orderByDesc('created_at')
+    ->value('tax_rate') ?? 12.0;
 
-    $pdf = Pdf::loadView('pdf.quotation', $data);
+$dpp   = round($subtotal * ($taxRate / ($taxRate + 1)));
+$ppn   = round($dpp * ($taxRate / 100));
+$total = $subtotal + $ppn;
+
+$pdf = Pdf::loadView('pdf.quotation', [
+    'quotation' => $quotation,
+    'subtotal'  => $subtotal,
+    'dpp'       => $dpp,
+    'ppn'       => $ppn,
+    'total'     => $total,
+    'taxRate'   => $taxRate,  // ✅ TAMBAH
+]);
     $pdf->setPaper('A4', 'portrait');
-    
+
     $filename = $this->sanitizeFilename($quotation->quotation_number);
-    
+
     return $pdf->stream('Quotation-' . $filename . '.pdf');
 }
 
@@ -65,9 +80,9 @@ public function generate($id)
     public function download($id)
     {
         $quotation = Quotation::with([
-            'company', 
-            'customer', 
-            'items.product', 
+            'company',
+            'customer',
+            'items.product',
             'createdByUser',
             'issuedByUser'
         ])->find($id);
@@ -103,10 +118,10 @@ public function generate($id)
 
         $pdf = Pdf::loadView('pdf.quotation', $data);
         $pdf->setPaper('A4', 'portrait');
-        
+
         // Sanitize filename untuk menghindari error karakter / atau \
         $filename = $this->sanitizeFilename($quotation->quotation_number);
-        
+
         return $pdf->download('Quotation-' . $filename . '.pdf');
     }
 
@@ -118,13 +133,13 @@ public function generate($id)
     {
         // Replace karakter yang tidak diizinkan dengan dash
         $filename = str_replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], '-', $filename);
-        
+
         // Ganti spasi dengan underscore
         $filename = preg_replace('/\s+/', '_', $filename);
-        
+
         // Hapus karakter special lainnya, hanya izinkan: huruf, angka, dash, underscore
         $filename = preg_replace('/[^A-Za-z0-9\-_]/', '', $filename);
-        
+
         return $filename;
     }
 }

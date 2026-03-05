@@ -185,36 +185,43 @@ public function uploadFile(Request $request, int $taxInvoiceId): JsonResponse
     /**
      * Approve tax invoice
      */
-    public function approve(Request $request, int $taxInvoiceId): JsonResponse
+ public function approve(Request $request, int $taxInvoiceId): JsonResponse
 {
-    $request->validate([
-        'file' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120',
-    ]);
-
     try {
-        // 1) upload/replace file dulu
-        $taxInvoice = $this->taxInvoiceService->uploadFile(
-            $taxInvoiceId,
-            $request->file('file')
-        );
+        $taxInvoice = TaxInvoice::find($taxInvoiceId);
 
-        // 2) baru approve
+        if (!$taxInvoice) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Tax invoice tidak ditemukan',
+            ], 404);
+        }
+
+        // ✅ Pastikan file sudah diupload sebelumnya
+        if (!$taxInvoice->file_path) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Upload file faktur pajak terlebih dahulu sebelum menyetujui.',
+            ], 422);
+        }
+
+        // ✅ Approve menggunakan file yang sudah ada (tidak perlu upload baru)
         $taxInvoice = $this->taxInvoiceService->approve($taxInvoiceId);
 
         return response()->json([
             'success' => true,
-            'message' => 'Tax invoice approved successfully',
+            'message' => 'Faktur pajak berhasil disetujui',
             'data'    => $taxInvoice,
         ]);
+
     } catch (\Exception $e) {
         return response()->json([
             'success' => false,
-            'message' => 'Failed to approve tax invoice',
+            'message' => 'Gagal menyetujui faktur pajak',
             'error'   => $e->getMessage(),
         ], 500);
     }
 }
-
 
     /**
      * Reject tax invoice

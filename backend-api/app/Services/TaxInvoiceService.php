@@ -108,50 +108,52 @@ class TaxInvoiceService
     /**
      * Create new tax invoice
      */
-    public function create(array $data, ?UploadedFile $file = null): TaxInvoice
+  public function create(array $data, ?UploadedFile $file = null): TaxInvoice
     {
         return DB::transaction(function () use ($data, $file) {
             // Get invoice to calculate tax
             $invoice = Invoice::findOrFail($data['invoice_id']);
 
             // Calculate DPP and Tax Amount
-            $dppAmount = $data['dpp_amount'] ?? $invoice->subtotal;
-            $taxRate = $data['tax_rate'] ?? 11.00;
-            $taxAmount = $dppAmount * ($taxRate / 100);
+            $dppAmount  = $data['dpp_amount'] ?? $invoice->subtotal;
+            $taxRate    = $data['tax_rate']   ?? 11.00;
+            $taxAmount  = $dppAmount * ($taxRate / 100);
 
-            // Generate tax invoice number
-            $taxInvoiceNumber = $data['tax_invoice_number'] ?? $this->generateTaxInvoiceNumber($data['company_id']);
+            // Generate tax invoice number if not provided
+            $taxInvoiceNumber = $data['tax_invoice_number']
+                ?? $this->generateTaxInvoiceNumber($data['company_id']);
 
-            // Upload file if exists
-            $filePath = null;
-            if ($file) {
-                $filePath = $this->uploadFile($file, 'tax_invoices');
-            }
-
-            // Create tax invoice
+            // ✅ Buat record dulu TANPA file_path — ID belum ada sebelum ini
             $taxInvoice = TaxInvoice::create([
-                'company_id' => $data['company_id'],
-                'invoice_id' => $data['invoice_id'],
+                'company_id'         => $data['company_id'],
+                'invoice_id'         => $data['invoice_id'],
                 'tax_invoice_number' => $taxInvoiceNumber,
-                'tax_invoice_date' => $data['tax_invoice_date'],
-                'tax_type' => $data['tax_type'] ?? 'ppn',
-                'dpp_amount' => $dppAmount,
-                'tax_rate' => $taxRate,
-                'tax_amount' => $taxAmount,
-                'status' => 'draft',
-                'file_path' => $filePath,
-                'notes' => $data['notes'] ?? null,
-                'created_by' => Auth::id(),
+                'tax_invoice_date'   => $data['tax_invoice_date'],
+                'tax_type'           => $data['tax_type'] ?? 'ppn',
+                'dpp_amount'         => $dppAmount,
+                'tax_rate'           => $taxRate,
+                'tax_amount'         => $taxAmount,
+                'status'             => 'draft',
+                'file_path'          => null,   // ✅ null dulu, upload setelah ada ID
+                'file_name'          => null,
+                'notes'              => $data['notes'] ?? null,
+                'created_by'         => Auth::id(),
             ]);
+
+            // ✅ Upload file SETELAH dapat ID — pakai uploadFile(id, file)
+            if ($file) {
+                $this->uploadFile($taxInvoice->tax_invoice_id, $file);
+                $taxInvoice->refresh(); // reload supaya file_path & file_name ter-update
+            }
 
             // Log activity
             ActivityLog::create([
-                'user_id' => Auth::id(),
-                'action' => 'create',
-                'module' => 'tax_invoices',
-                'record_id' => $taxInvoice->tax_invoice_id,
+                'user_id'     => Auth::id(),
+                'action'      => 'create',
+                'module'      => 'tax_invoices',
+                'record_id'   => $taxInvoice->tax_invoice_id,
                 'description' => "Tax Invoice created: {$taxInvoice->tax_invoice_number}",
-                'ip_address' => request()->ip(),
+                'ip_address'  => request()->ip(),
             ]);
 
             return $taxInvoice;

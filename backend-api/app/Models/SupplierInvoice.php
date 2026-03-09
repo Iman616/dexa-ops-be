@@ -2,7 +2,9 @@
 
 namespace App\Models;
 
+
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Storage;
 
 class SupplierInvoice extends Model
 {
@@ -27,6 +29,7 @@ class SupplierInvoice extends Model
         'due_date',
         'payment_terms',
         'invoice_file_path',
+        'tax_invoice_file_path',
         'notes',
         'created_by',
         'created_at',
@@ -47,105 +50,126 @@ class SupplierInvoice extends Model
         'is_draft',
         'is_issued',
         'has_file',
+           'has_tax_invoice',
+    'invoice_file_url',
+    'tax_invoice_file_url',
     ];
+
+    public function getHasTaxInvoiceAttribute(): bool
+{
+    return !empty($this->tax_invoice_file_path);
+}
+
+public function getInvoiceFileUrlAttribute(): ?string
+{
+    if (!$this->invoice_file_path) return null;
+    return url(Storage::url($this->invoice_file_path));
+}
+
+public function getTaxInvoiceFileUrlAttribute(): ?string
+{
+    if (!$this->tax_invoice_file_path) return null;
+    return url(Storage::url($this->tax_invoice_file_path));
+}
+
 
     // ✅ Accessors
     public function getRemainingAmountAttribute()
     {
         return $this->total_amount - $this->paid_amount;
     }
-    
+
     public function getIsOverdueAttribute()
     {
         if (!$this->due_date) {
             return false;
         }
-        
-        return $this->due_date->isPast() 
+
+        return $this->due_date->isPast()
             && in_array($this->payment_status, ['unpaid', 'partial']);
     }
-    
+
     public function getDaysOverdueAttribute()
     {
         if (!$this->is_overdue) {
             return 0;
         }
-        
+
         return now()->diffInDays($this->due_date);
     }
-    
+
     public function getIsDraftAttribute()
     {
         return $this->invoice_status === 'draft';
     }
-    
+
     public function getIsIssuedAttribute()
     {
         return $this->invoice_status === 'issued';
     }
-    
+
     public function getHasFileAttribute()
     {
         return !empty($this->invoice_file_path);
     }
-    
+
     // ✅ Relationships
     public function supplier()
     {
         return $this->belongsTo(Supplier::class, 'supplier_id', 'supplier_id');
     }
-    
+
     public function supplierPO()
     {
         return $this->belongsTo(SupplierPurchaseOrder::class, 'supplier_po_id', 'supplier_po_id');
     }
-    
+
     public function supplierDeliveryNote()
     {
         return $this->belongsTo(SupplierDeliveryNote::class, 'supplier_delivery_note_id', 'supplier_delivery_note_id');
     }
-    
+
     public function items()
     {
         return $this->hasMany(SupplierInvoiceItem::class, 'supplier_invoice_id', 'supplier_invoice_id');
     }
-    
+
     public function payments()
     {
         return $this->hasMany(SupplierPayment::class, 'supplier_invoice_id', 'supplier_invoice_id');
     }
-    
+
     public function createdByUser()
     {
         return $this->belongsTo(User::class, 'created_by', 'user_id');
     }
-    
+
     // ✅ Scopes
     public function scopeDraft($query)
     {
         return $query->where('invoice_status', 'draft');
     }
-    
+
     public function scopeIssued($query)
     {
         return $query->where('invoice_status', 'issued');
     }
-    
+
     public function scopeUnpaid($query)
     {
         return $query->where('payment_status', 'unpaid');
     }
-    
+
     public function scopePartial($query)
     {
         return $query->where('payment_status', 'partial');
     }
-    
+
     public function scopePaid($query)
     {
         return $query->where('payment_status', 'paid');
     }
-    
+
     public function scopeOverdue($query)
     {
         return $query->where('due_date', '<', now())

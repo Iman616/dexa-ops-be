@@ -18,7 +18,7 @@ class PurchaseOrder extends Model
         'activity_type_id',
         'po_number',
         'po_date',
-        'valid_until', 
+        'valid_until',
         'po_file_path',
         'po_customer_file_path',
         'po_customer_uploaded_at',
@@ -33,8 +33,8 @@ class PurchaseOrder extends Model
         'created_by',
         'issued_by',
         'issued_at',
-        'work_package',  
-        'activity_name',  
+        'work_package',
+        'activity_name',
     ];
 
     protected $casts = [
@@ -298,17 +298,17 @@ public function proformaInvoices()
         if ($this->activityType && $this->activityType->type_code === 'TENDER') {
             return true;
         }
-        
+
         // Priority 2: Check from quotation->activityType
         if ($this->quotation && $this->quotation->activityType) {
             return in_array($this->quotation->activityType->type_code, ['TENDER', 'paket_pengadaan', 'penunjukan_langsung']);
         }
-        
+
         // Priority 3: Check by activity_type_id (if 1 or 2, likely tender)
         if (in_array($this->activity_type_id, [1, 2])) {
             return true;
         }
-        
+
         return false;
     }
 
@@ -369,12 +369,12 @@ public function proformaInvoices()
         $this->deletePoCustomerFile();
         $filename = 'PO_CUSTOMER_' . $this->po_id . '_' . time() . '.' . $file->getClientOriginalExtension();
         $path = $file->storeAs('purchase_orders/customer', $filename, 'public');
-        
+
         $this->update([
             'po_customer_file_path' => $path,
             'po_customer_uploaded_at' => now(),
         ]);
-        
+
         return $path;
     }
 
@@ -385,7 +385,22 @@ public function proformaInvoices()
         }
     }
 
-    
+public function getStockShortageForProcurement(): array
+{
+    $validation = $this->validateStockAvailability();
+
+    if ($validation['is_valid']) {
+        return ['needs_procurement' => false, 'issues' => []];
+    }
+
+    return [
+        'needs_procurement' => true,
+        'issues'            => $validation['issues'], // shortage per produk
+    ];
+}
+
+
+
 
     protected static function boot()
     {

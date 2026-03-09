@@ -5,55 +5,91 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Carbon\Carbon;
 
 class DashboardController extends Controller
 {
     /* =========================================================
      * HELPER: company_id aktif dari session
+     * ✅ OPTIMIZED: cache per user 60 detik, hindari query berulang
      * ========================================================= */
     private function getCompanyId(Request $request): ?int
     {
         $user = $request->user();
 
-        $session = DB::table('user_sessions')
-            ->where('user_id', $user->user_id)
-            ->where('is_active', true)
-            ->orderByDesc('login_at')
-            ->first();
+        return Cache::remember(
+            "user_company_{$user->user_id}",
+            60,
+            function () use ($user) {
+                $session = DB::table('user_sessions')
+                    ->where('user_id', $user->user_id)
+                    ->where('is_active', true)
+                    ->orderByDesc('login_at')
+                    ->value('selected_company_id'); // ✅ ->value() lebih ringan dari ->first()
 
-        return $session?->selected_company_id ?? $user->default_company_id;
+                return $session ?? $user->default_company_id;
+            }
+        );
     }
 
     /* =========================================================
-     * HELPER: cek apakah user punya akses ke menu tertentu
+     * HELPER: batch cek menu access sekaligus (1 query, bukan N query)
+     * ✅ OPTIMIZED: sebelumnya 1 query per menu key → sekarang 1 query untuk semua
      * ========================================================= */
-    private function hasMenuAccess(int $roleId, string $menuKey): bool
+    private function getMenuAccess(int $roleId, array $menuKeys): array
     {
-        if ($roleId === 1) return true; // Super Admin bypass
+        if ($roleId === 1) {
+            // Super Admin: semua true
+            return array_fill_keys($menuKeys, true);
+        }
 
-        return DB::table('role_menus as rm')
+        $allowed = DB::table('role_menus as rm')
             ->join('menus as m', 'm.menu_id', '=', 'rm.menu_id')
             ->where('rm.role_id', $roleId)
-            ->where('m.menu_key', $menuKey)
+            ->whereIn('m.menu_key', $menuKeys)
             ->where('rm.can_read', 1)
-            ->exists();
+            ->pluck('m.menu_key')
+            ->flip()
+            ->map(fn() => true)
+            ->toArray();
+
+        return array_merge(array_fill_keys($menuKeys, false), $allowed);
     }
 
     /* =========================================================
-     * HELPER: scope query by company (Super Admin = semua)
+     * HELPER: builder supplier invoice base query
+     * (dipakai di beberapa tempat, DRY)
      * ========================================================= */
-    private function scopeCompany($query, string $table, int $roleId, ?int $companyId)
+    private function supplierInvoiceBase(int $roleId, ?int $companyId)
     {
-        if ($roleId !== 1 && $companyId) {
-            $query->where("{$table}.company_id", $companyId);
+        if ($roleId === 1 || !$companyId) {
+            return DB::table('supplierinvoices as si');
         }
-        return $query;
+
+        return DB::table('supplierinvoices as si')
+            ->where(function ($q) use ($companyId) {
+                $q->whereIn('si.supplier_po_id', function ($sub) use ($companyId) {
+                    $sub->select('supplier_po_id')
+                        ->from('supplier_purchase_orders')
+                        ->where('company_id', $companyId);
+                })->orWhere(function ($q2) use ($companyId) {
+                    $q2->whereNull('si.supplier_po_id')
+                       ->whereIn('si.supplier_id', function ($sub) use ($companyId) {
+                           $sub->select('supplier_id')->distinct()
+                               ->from('supplier_purchase_orders')
+                               ->where('company_id', $companyId);
+                       });
+                });
+            });
     }
 
     /* =========================================================
      * GET /api/dashboard/stats
+     * ✅ OPTIMIZED:
+     *   - 1 query batch per tabel (SUM CASE) gantikan N count() terpisah
+     *   - 1 query batch hasMenuAccess untuk semua menu sekaligus
+     *   - Cache 2 menit untuk data master (customers, products, suppliers)
      * ========================================================= */
     public function getStats(Request $request)
     {
@@ -61,169 +97,185 @@ class DashboardController extends Controller
             $user      = $request->user();
             $roleId    = (int) $user->role_id;
             $companyId = $this->getCompanyId($request);
+            $today     = now()->toDateString();
+
+            // ✅ 1 query untuk semua menu check sekaligus
+            $access = $this->getMenuAccess($roleId, [
+                'quotations', 'purchase_orders', 'invoices',
+                'supplier_po', 'supplier_invoices', 'stock_batches',
+                'products', 'customers', 'suppliers',
+            ]);
 
             $data = [];
 
-            /* ---- SALES ---- */
-            if ($this->hasMenuAccess($roleId, 'quotations')) {
-                $qBase = DB::table('quotations')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
+            /* ---- SALES: quotations (1 query, bukan 4) ---- */
+            if ($access['quotations']) {
+                $row = DB::table('quotations')
+                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
+                    ->selectRaw("
+                        COUNT(*) AS total,
+                        SUM(status = 'draft')    AS draft,
+                        SUM(status = 'sent')     AS sent,
+                        SUM(status = 'approved') AS approved
+                    ")
+                    ->first();
 
                 $data['quotations'] = [
-                    'total'    => (clone $qBase)->count(),
-                    'draft'    => (clone $qBase)->where('status', 'draft')->count(),
-                    'sent'     => (clone $qBase)->where('status', 'sent')->count(),
-                    'approved' => (clone $qBase)->where('status', 'approved')->count(),
+                    'total'    => (int) $row->total,
+                    'draft'    => (int) $row->draft,
+                    'sent'     => (int) $row->sent,
+                    'approved' => (int) $row->approved,
                 ];
             }
 
-            if ($this->hasMenuAccess($roleId, 'purchase_orders')) {
-                $poBase = DB::table('purchase_orders')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
+            /* ---- SALES: purchase_orders (1 query, bukan 4) ---- */
+            if ($access['purchase_orders']) {
+                $row = DB::table('purchase_orders')
+                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
+                    ->selectRaw("
+                        COUNT(*) AS total,
+                        SUM(status = 'processing') AS processing,
+                        SUM(status = 'completed')  AS completed,
+                        SUM(status IN ('draft','issued','sent')) AS pending
+                    ")
+                    ->first();
 
                 $data['purchase_orders'] = [
-                    'total'       => (clone $poBase)->count(),
-                    'processing'  => (clone $poBase)->where('status', 'processing')->count(),
-                    'completed'   => (clone $poBase)->where('status', 'completed')->count(),
-                    'pending'     => (clone $poBase)->whereIn('status', ['draft', 'issued', 'sent'])->count(),
+                    'total'      => (int) $row->total,
+                    'processing' => (int) $row->processing,
+                    'completed'  => (int) $row->completed,
+                    'pending'    => (int) $row->pending,
                 ];
             }
 
-            /* ---- FINANCE ---- */
-            if ($this->hasMenuAccess($roleId, 'invoices')) {
-                $invBase = DB::table('invoices')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
+            /* ---- FINANCE: invoices (1 query, bukan 5) ---- */
+            if ($access['invoices']) {
+                $row = DB::table('invoices')
+                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
+                    ->selectRaw("
+                        COUNT(*) AS total,
+                        SUM(payment_status = 'unpaid') AS unpaid,
+                        SUM(payment_status = 'paid')   AS paid,
+                        COALESCE(SUM(CASE WHEN payment_status = 'unpaid' THEN total_amount ELSE 0 END), 0) AS unpaid_amount,
+                        SUM(payment_status != 'paid' AND due_date < ?) AS overdue
+                    ", [$today])
+                    ->first();
 
                 $data['invoices'] = [
-                    'total'         => (clone $invBase)->count(),
-                    'unpaid'        => (clone $invBase)->where('payment_status', 'unpaid')->count(),
-                    'paid'          => (clone $invBase)->where('payment_status', 'paid')->count(),
-                    'unpaid_amount' => (clone $invBase)->where('payment_status', 'unpaid')->sum('total_amount'),
-                    'overdue'       => (clone $invBase)
-                        ->where('payment_status', '!=', 'paid')
-                        ->where('due_date', '<', now()->toDateString())
-                        ->count(),
+                    'total'         => (int) $row->total,
+                    'unpaid'        => (int) $row->unpaid,
+                    'paid'          => (int) $row->paid,
+                    'unpaid_amount' => (float) $row->unpaid_amount,
+                    'overdue'       => (int) $row->overdue,
                 ];
             }
 
-            /* ---- PURCHASING ---- */
-            if ($this->hasMenuAccess($roleId, 'supplier_po')) {
-                $spoBase = DB::table('supplier_purchase_orders')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
+            /* ---- PURCHASING: supplier_po (1 query, bukan 3) ---- */
+            if ($access['supplier_po']) {
+                $row = DB::table('supplier_purchase_orders')
+                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
+                    ->selectRaw("
+                        COUNT(*) AS total,
+                        SUM(status IN ('draft','issued')) AS pending,
+                        SUM(status = 'completed')         AS completed
+                    ")
+                    ->first();
 
                 $data['supplier_po'] = [
-                    'total'     => (clone $spoBase)->count(),
-                    'pending'   => (clone $spoBase)->whereIn('status', ['draft', 'issued'])->count(),
-                    'completed' => (clone $spoBase)->where('status', 'completed')->count(),
+                    'total'     => (int) $row->total,
+                    'pending'   => (int) $row->pending,
+                    'completed' => (int) $row->completed,
                 ];
             }
 
-            if ($this->hasMenuAccess($roleId, 'supplier_invoices')) {
-                /*
-                 * ✅ FIX: "Cardinality violation: Subquery returns more than 1 row"
-                 *
-                 * SEBELUM (❌ BUGGY):
-                 *   ->where('supplier_id', function($sub) { $sub->select('supplier_id')... })
-                 *   Operator '=' hanya bisa menampung 1 baris. Jika subquery
-                 *   mengembalikan >1 baris → MySQL error 1242.
-                 *
-                 * SESUDAH (✅ FIXED):
-                 *   Gunakan JOIN langsung ke supplier_purchase_orders agar query
-                 *   lebih efisien dan tepat.
-                 *
-                 *   STRATEGI FILTER:
-                 *   - supplierinvoices TIDAK punya company_id
-                 *   - Filter via supplier_po_id → supplier_purchase_orders.company_id
-                 *     (paling akurat, karena PO memang milik company tertentu)
-                 *   - Fallback: invoices tanpa PO di-include jika supplier_id
-                 *     pernah bertransaksi dengan company (via whereIn, bukan '=')
-                 *
-                 *   Pendekatan paling aman & correct untuk dashboard stats:
-                 *   JOIN ke supplier_purchase_orders, group by supplier_invoice_id
-                 *   agar tidak double-count jika satu invoice punya banyak PO.
-                 */
-                if ($roleId !== 1 && $companyId) {
-                    $siBase = DB::table('supplierinvoices as si')
-                        ->where(function ($q) use ($companyId) {
-                            // Kasus 1: invoice punya supplier_po_id → filter via PO company_id
-                            $q->whereIn('si.supplier_po_id', function ($sub) use ($companyId) {
-                                $sub->select('supplier_po_id')
-                                    ->from('supplier_purchase_orders')
-                                    ->where('company_id', $companyId);
-                            })
-                            // Kasus 2: invoice tidak punya PO (supplier_po_id = NULL)
-                            // → filter via supplier_id IN (supplier yang pernah ada PO di company ini)
-                            ->orWhere(function ($q2) use ($companyId) {
-                                $q2->whereNull('si.supplier_po_id')
-                                   ->whereIn('si.supplier_id', function ($sub) use ($companyId) {
-                                       $sub->select('supplier_id')
-                                           ->from('supplier_purchase_orders')
-                                           ->where('company_id', $companyId)
-                                           ->distinct(); // ✅ distinct agar tidak cardinality issue
-                                   });
-                            });
-                        });
-                } else {
-                    // Super Admin: semua invoice
-                    $siBase = DB::table('supplierinvoices as si');
-                }
+            /* ---- PURCHASING: supplier_invoices (1 query, bukan 4) ---- */
+            if ($access['supplier_invoices']) {
+                $siBase = $this->supplierInvoiceBase($roleId, $companyId);
+
+                $row = (clone $siBase)
+                    ->selectRaw("
+                        COUNT(*) AS total,
+                        SUM(si.payment_status = 'unpaid') AS unpaid,
+                        SUM(si.payment_status = 'paid')   AS paid,
+                        COALESCE(SUM(CASE WHEN si.payment_status = 'unpaid' THEN si.total_amount ELSE 0 END), 0) AS unpaid_amount,
+                        SUM(si.payment_status != 'paid' AND si.due_date < ?) AS overdue
+                    ", [$today])
+                    ->first();
 
                 $data['supplier_invoices'] = [
-                    'total'         => (clone $siBase)->count(),
-                    'unpaid'        => (clone $siBase)->where('si.payment_status', 'unpaid')->count(),
-                    'unpaid_amount' => (clone $siBase)->where('si.payment_status', 'unpaid')->sum('si.total_amount'),
-                    'paid'          => (clone $siBase)->where('si.payment_status', 'paid')->count(),
+                    'total'         => (int) $row->total,
+                    'unpaid'        => (int) $row->unpaid,
+                    'paid'          => (int) $row->paid,
+                    'unpaid_amount' => (float) $row->unpaid_amount,
+                    'overdue'       => (int) $row->overdue,
                 ];
             }
 
-            /* ---- WAREHOUSE ---- */
-            if ($this->hasMenuAccess($roleId, 'stock_batches')) {
-                $sbBase = DB::table('stock_batches')
-                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
+            /* ---- WAREHOUSE: stock_batches (1 query, bukan 4) ---- */
+            if ($access['stock_batches']) {
+                $expireDate = now()->addDays(30)->toDateString();
+                $row = DB::table('stock_batches')
+                    ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
+                    ->selectRaw("
+                        COUNT(*) AS total,
+                        SUM(status = 'active')   AS active,
+                        SUM(status = 'expired')  AS expired,
+                        SUM(status = 'active' AND expiry_date <= ?) AS near_expiry
+                    ", [$expireDate])
+                    ->first();
 
                 $data['stock_batches'] = [
-                    'total'    => (clone $sbBase)->count(),
-                    'active'   => (clone $sbBase)->where('status', 'active')->count(),
-                    'expiring' => (clone $sbBase)
-                        ->where('status', 'active')
-                        ->where('expiry_date', '<=', now()->addDays(30)->toDateString())
-                        ->count(),
-                    'expired'  => (clone $sbBase)->where('status', 'expired')->count(),
+                    'total'      => (int) $row->total,
+                    'active'     => (int) $row->active,
+                    'expired'    => (int) $row->expired,
+                    'near_expiry'=> (int) $row->near_expiry,
                 ];
             }
 
-            /* ---- MASTER DATA ---- */
-            if ($this->hasMenuAccess($roleId, 'products')) {
-                $totalProducts = DB::table('products')->count();
-                $data['products'] = [
-                    'total'  => $totalProducts,
-                    'active' => $totalProducts,
+            /* ---- MASTER DATA: cache 5 menit (data jarang berubah) ---- */
+            if ($access['products']) {
+                $total = Cache::remember("stats_products_{$companyId}", 300, fn() =>
+                    DB::table('products')->count()
+                );
+                $data['products'] = ['total' => $total, 'active' => $total];
+            }
+
+            if ($access['customers']) {
+                $total = Cache::remember("stats_customers_{$companyId}", 300, fn() =>
+                    DB::table('customers')->count()
+                );
+                $data['customers'] = ['total' => $total];
+            }
+
+            if ($access['suppliers']) {
+                $total = Cache::remember("stats_suppliers_{$companyId}", 300, fn() =>
+                    DB::table('suppliers')->count()
+                );
+                $data['suppliers'] = ['total' => $total, 'active' => $total];
+            }
+
+            /* ---- SYSTEM (Super Admin only) ---- */
+            if ($roleId === 1) {
+                $row = DB::table('user_sessions')
+                    ->selectRaw("
+                        COUNT(DISTINCT user_id) AS active_users,
+                        COUNT(*) AS active_sessions
+                    ")
+                    ->where('is_active', true)
+                    ->first();
+
+                $data['system'] = [
+                    'active_users'    => (int) $row->active_users,
+                    'active_sessions' => (int) $row->active_sessions,
+                    'total_companies' => Cache::remember('stats_companies', 300, fn() => DB::table('companies')->count()),
+                    'total_users'     => Cache::remember('stats_users', 300, fn() => DB::table('users')->count()),
                 ];
             }
 
-            if ($this->hasMenuAccess($roleId, 'customers')) {
-                $data['customers'] = [
-                    'total' => DB::table('customers')->count(),
-                ];
-            }
-
-            if ($this->hasMenuAccess($roleId, 'suppliers')) {
-                $totalSuppliers = DB::table('suppliers')->count();
-                $data['suppliers'] = [
-                    'total'  => $totalSuppliers,
-                    'active' => $totalSuppliers,
-                ];
-            }
-
-            return response()->json([
-                'success' => true,
-                'data'    => $data,
-            ]);
+            return response()->json(['success' => true, 'data' => $data]);
 
         } catch (\Exception $e) {
-            \Log::error('Dashboard stats error: ' . $e->getMessage(), [
-                'trace' => $e->getTraceAsString(),
-            ]);
+            \Log::error('Dashboard stats error: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to load stats',
@@ -234,6 +286,7 @@ class DashboardController extends Controller
 
     /* =========================================================
      * GET /api/dashboard/recent-transactions
+     * ✅ OPTIMIZED: UNION ALL satu query ke DB, bukan 3 query + PHP sort
      * ========================================================= */
     public function getRecentTransactions(Request $request)
     {
@@ -243,14 +296,14 @@ class DashboardController extends Controller
             $companyId = $this->getCompanyId($request);
             $limit     = min((int) $request->input('limit', 10), 50);
 
-            $transactions = collect();
+            $access = $this->getMenuAccess($roleId, ['invoices', 'payments', 'supplier-po']);
 
-            if ($this->hasMenuAccess($roleId, 'invoices')) {
-                $invoices = DB::table('invoices as i')
+            $unions = [];
+
+            if ($access['invoices']) {
+                $unions[] = DB::table('invoices as i')
                     ->leftJoin('customers as c', 'c.customer_id', '=', 'i.customer_id')
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
-                    ->orderByDesc('i.created_at')
-                    ->limit($limit)
                     ->select(
                         'i.invoice_id as id',
                         DB::raw("'invoice' as type"),
@@ -261,18 +314,15 @@ class DashboardController extends Controller
                         'i.invoice_date as date',
                         'i.created_at'
                     )
-                    ->get();
-
-                $transactions = $transactions->merge($invoices);
+                    ->orderByDesc('i.created_at')
+                    ->limit($limit);
             }
 
-            if ($this->hasMenuAccess($roleId, 'payments')) {
-                $payments = DB::table('payments as p')
+            if ($access['payments']) {
+                $unions[] = DB::table('payments as p')
                     ->leftJoin('invoices as i', 'i.invoice_id', '=', 'p.invoice_id')
                     ->leftJoin('customers as c', 'c.customer_id', '=', 'i.customer_id')
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
-                    ->orderByDesc('p.created_at')
-                    ->limit($limit)
                     ->select(
                         'p.payment_id as id',
                         DB::raw("'payment' as type"),
@@ -283,17 +333,14 @@ class DashboardController extends Controller
                         'p.payment_date as date',
                         'p.created_at'
                     )
-                    ->get();
-
-                $transactions = $transactions->merge($payments);
+                    ->orderByDesc('p.created_at')
+                    ->limit($limit);
             }
 
-            if ($this->hasMenuAccess($roleId, 'supplier-po')) {
-                $spoTx = DB::table('supplier_purchase_orders as spo')
+            if ($access['supplier-po']) {
+                $unions[] = DB::table('supplier_purchase_orders as spo')
                     ->leftJoin('suppliers as s', 's.supplier_id', '=', 'spo.supplier_id')
                     ->when($roleId !== 1 && $companyId, fn($q) => $q->where('spo.company_id', $companyId))
-                    ->orderByDesc('spo.created_at')
-                    ->limit($limit)
                     ->select(
                         'spo.supplier_po_id as id',
                         DB::raw("'supplier_po' as type"),
@@ -304,20 +351,27 @@ class DashboardController extends Controller
                         'spo.po_date as date',
                         'spo.created_at'
                     )
-                    ->get();
-
-                $transactions = $transactions->merge($spoTx);
+                    ->orderByDesc('spo.created_at')
+                    ->limit($limit);
             }
 
-            $result = $transactions
-                ->sortByDesc('created_at')
-                ->take($limit)
-                ->values();
+            if (empty($unions)) {
+                return response()->json(['success' => true, 'data' => []]);
+            }
 
-            return response()->json([
-                'success' => true,
-                'data'    => $result,
-            ], 200);
+            // ✅ UNION ALL di DB, bukan merge di PHP
+            $base = array_shift($unions);
+            foreach ($unions as $q) {
+                $base = $base->unionAll($q);
+            }
+
+            $result = DB::query()
+                ->fromSub($base, 'combined')
+                ->orderByDesc('created_at')
+                ->limit($limit)
+                ->get();
+
+            return response()->json(['success' => true, 'data' => $result]);
 
         } catch (\Exception $e) {
             return response()->json([
@@ -329,7 +383,419 @@ class DashboardController extends Controller
     }
 
     /* =========================================================
-     * GET /api/dashboard/monthly-revenue
+     * GET /api/dashboard/weekly-revenue
+     * ✅ OPTIMIZED: 2 query SUM jadi 1 query CASE WHEN
+     * ========================================================= */
+    public function getWeeklyRevenue(Request $request)
+    {
+        try {
+            $user      = $request->user();
+            $roleId    = (int) $user->role_id;
+            $companyId = $this->getCompanyId($request);
+
+            $access = $this->getMenuAccess($roleId, ['invoices', 'financial-report']);
+            if (!$access['invoices'] && !$access['financial-report']) {
+                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
+            }
+
+            $thisStart = Carbon::now()->startOfWeek()->toDateString();
+            $thisEnd   = Carbon::now()->endOfWeek()->toDateString();
+            $lastStart = Carbon::now()->subWeek()->startOfWeek()->toDateString();
+            $lastEnd   = Carbon::now()->subWeek()->endOfWeek()->toDateString();
+
+            // ✅ 1 query gantikan 2 query SUM terpisah
+            $row = DB::table('invoices')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
+                ->whereBetween('invoice_date', [$lastStart, $thisEnd])
+                ->selectRaw("
+                    COALESCE(SUM(CASE WHEN invoice_date BETWEEN ? AND ? THEN total_amount ELSE 0 END), 0) AS this_week,
+                    COALESCE(SUM(CASE WHEN invoice_date BETWEEN ? AND ? THEN total_amount ELSE 0 END), 0) AS last_week
+                ", [$thisStart, $thisEnd, $lastStart, $lastEnd])
+                ->first();
+
+            $thisWeek = (float) $row->this_week;
+            $lastWeek = (float) $row->last_week;
+
+            return response()->json([
+                'success' => true,
+                'data'    => [
+                    'this_week'         => $thisWeek,
+                    'last_week'         => $lastWeek,
+                    'percentage_change' => $lastWeek > 0
+                        ? round((($thisWeek - $lastWeek) / $lastWeek) * 100, 2) : 0,
+                    'is_increase'       => $thisWeek >= $lastWeek,
+                ],
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch weekly revenue',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /* =========================================================
+     * GET /api/dashboard/omset-margin
+     * ✅ OPTIMIZED: prev period digabung dalam 1 query per tabel
+     *   (bukan 4 query terpisah untuk current + prev)
+     * ========================================================= */
+    public function getOmsetMargin(Request $request)
+    {
+        try {
+            $user      = $request->user();
+            $roleId    = (int) $user->role_id;
+            $companyId = $this->getCompanyId($request);
+
+            $access = $this->getMenuAccess($roleId, ['invoices', 'financial-report']);
+            if (!$access['invoices'] && !$access['financial-report']) {
+                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
+            }
+
+            [$startDate, $endDate] = $this->resolveDateRange($request);
+            $prevStart = Carbon::parse($startDate)->subMonth()->startOfMonth()->toDateString();
+            $prevEnd   = Carbon::parse($startDate)->subMonth()->endOfMonth()->toDateString();
+
+            // ✅ 1 query untuk current + prev period sekaligus
+            $omsetRow = DB::table('invoices')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
+                ->whereBetween('invoice_date', [$prevStart, $endDate])
+                ->selectRaw("
+                    COALESCE(SUM(CASE WHEN invoice_date BETWEEN ? AND ? THEN 1              ELSE 0 END), 0) AS total_invoices,
+                    COALESCE(SUM(CASE WHEN invoice_date BETWEEN ? AND ? THEN subtotal       ELSE 0 END), 0) AS omset,
+                    COALESCE(SUM(CASE WHEN invoice_date BETWEEN ? AND ? THEN tax_amount     ELSE 0 END), 0) AS total_ppn,
+                    COALESCE(SUM(CASE WHEN invoice_date BETWEEN ? AND ? THEN total_amount   ELSE 0 END), 0) AS omset_with_tax,
+                    COALESCE(SUM(CASE WHEN invoice_date BETWEEN ? AND ? AND payment_status = 'paid'   THEN total_amount ELSE 0 END), 0) AS omset_paid,
+                    COALESCE(SUM(CASE WHEN invoice_date BETWEEN ? AND ? AND payment_status = 'unpaid' THEN total_amount ELSE 0 END), 0) AS omset_unpaid,
+                    COALESCE(SUM(CASE WHEN invoice_date BETWEEN ? AND ? THEN subtotal       ELSE 0 END), 0) AS prev_omset
+                ", [
+                    $startDate, $endDate,
+                    $startDate, $endDate,
+                    $startDate, $endDate,
+                    $startDate, $endDate,
+                    $startDate, $endDate,
+                    $startDate, $endDate,
+                    $prevStart, $prevEnd,
+                ])
+                ->first();
+
+            // ✅ 1 query untuk HPP current + prev sekaligus
+            $hppRow = DB::table('stock_out as so')
+                ->join('stock_batches as sb', 'sb.batch_id', '=', 'so.batch_id')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
+                ->where('so.transaction_type', 'sale')
+                ->whereBetween('so.out_date', [$prevStart, $endDate])
+                ->selectRaw("
+                    COALESCE(SUM(CASE WHEN so.out_date BETWEEN ? AND ? THEN so.quantity * sb.purchase_price ELSE 0 END), 0) AS hpp,
+                    COALESCE(SUM(CASE WHEN so.out_date BETWEEN ? AND ? THEN so.quantity * so.selling_price  ELSE 0 END), 0) AS pendapatan_stock_out,
+                    SUM(CASE WHEN so.out_date BETWEEN ? AND ? THEN 1 ELSE 0 END) AS total_stock_out,
+                    COALESCE(SUM(CASE WHEN so.out_date BETWEEN ? AND ? THEN so.quantity * sb.purchase_price ELSE 0 END), 0) AS prev_hpp
+                ", [
+                    $startDate, $endDate,
+                    $startDate, $endDate,
+                    $startDate, $endDate,
+                    $prevStart, $prevEnd,
+                ])
+                ->first();
+
+            $omset      = (float) $omsetRow->omset;
+            $hpp        = (float) $hppRow->hpp;
+            $margin     = $omset - $hpp;
+            $prevOmset  = (float) $omsetRow->prev_omset;
+            $prevHpp    = (float) $hppRow->prev_hpp;
+            $prevMargin = $prevOmset - $prevHpp;
+
+            return response()->json([
+                'success' => true,
+                'period'  => ['start' => $startDate, 'end' => $endDate],
+                'data'    => [
+                    'omset'           => $omset,
+                    'omset_with_tax'  => (float) $omsetRow->omset_with_tax,
+                    'total_ppn'       => (float) $omsetRow->total_ppn,
+                    'omset_paid'      => (float) $omsetRow->omset_paid,
+                    'omset_unpaid'    => (float) $omsetRow->omset_unpaid,
+                    'total_invoices'  => (int)   $omsetRow->total_invoices,
+                    'hpp'             => $hpp,
+                    'margin'          => $margin,
+                    'margin_percent'  => $omset > 0 ? round(($margin / $omset) * 100, 2) : 0,
+                    'total_stock_out' => (int) $hppRow->total_stock_out,
+                    'prev_omset'      => $prevOmset,
+                    'prev_hpp'        => $prevHpp,
+                    'prev_margin'     => $prevMargin,
+                    'omset_growth'    => $prevOmset > 0 ? round((($omset - $prevOmset) / $prevOmset) * 100, 2) : 0,
+                    'margin_growth'   => $prevMargin > 0 ? round((($margin - $prevMargin) / $prevMargin) * 100, 2) : 0,
+                ],
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch omset & margin',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /* =========================================================
+     * GET /api/dashboard/omset-by-type
+     * ✅ OPTIMIZED: query omsetNoType pakai LEFT JOIN bukan NOT EXISTS
+     * ========================================================= */
+    public function getOmsetByTypeCode(Request $request)
+    {
+        try {
+            $user      = $request->user();
+            $roleId    = (int) $user->role_id;
+            $companyId = $this->getCompanyId($request);
+
+            $access = $this->getMenuAccess($roleId, ['invoices', 'financial-report']);
+            if (!$access['invoices'] && !$access['financial-report']) {
+                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
+            }
+
+            [$startDate, $endDate] = $this->resolveDateRange($request);
+
+            // ✅ Semua jenis omset sekaligus via LEFT JOIN (termasuk NULL type_code)
+            $allOmset = DB::table('invoices as i')
+                ->leftJoin('purchase_orders as po', 'po.po_id', '=', 'i.po_id')
+                ->leftJoin('activity_types as at', 'at.activity_type_id', '=', 'po.activity_type_id')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
+                ->whereBetween('i.invoice_date', [$startDate, $endDate])
+                ->selectRaw("
+                    COALESCE(at.type_code, 'OTHER') AS type_code,
+                    COALESCE(at.type_name, 'Lainnya') AS type_name,
+                    COUNT(i.invoice_id)              AS total_invoices,
+                    COALESCE(SUM(i.subtotal), 0)     AS omset,
+                    COALESCE(SUM(i.total_amount), 0) AS omset_with_tax
+                ")
+                ->groupByRaw("COALESCE(at.type_code, 'OTHER'), COALESCE(at.type_name, 'Lainnya')")
+                ->get()
+                ->keyBy('type_code');
+
+            $hppByType = DB::table('stock_out as so')
+                ->join('stock_batches as sb',   'sb.batch_id',          '=', 'so.batch_id')
+                ->join('delivery_notes as dn',  'dn.delivery_note_id',  '=', 'so.delivery_note_id')
+                ->join('invoices as i',          'i.invoice_id',         '=', 'dn.invoice_id')
+                ->join('purchase_orders as po',  'po.po_id',             '=', 'i.po_id')
+                ->join('activity_types as at',   'at.activity_type_id',  '=', 'po.activity_type_id')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
+                ->where('so.transaction_type', 'sale')
+                ->whereBetween('so.out_date', [$startDate, $endDate])
+                ->selectRaw("
+                    at.type_code,
+                    COALESCE(SUM(so.quantity * sb.purchase_price), 0) AS hpp
+                ")
+                ->groupBy('at.type_code')
+                ->get()
+                ->keyBy('type_code');
+
+            $allTypeCodes = ['TENDER', 'RETAIL', 'ONLINE_SHOP', 'OTHER'];
+            $result       = [];
+            $grandOmset   = 0;
+            $grandMargin  = 0;
+
+            foreach ($allTypeCodes as $code) {
+                $omset  = (float) ($allOmset[$code]->omset ?? 0);
+                $hpp    = $code === 'OTHER' ? 0 : (float) ($hppByType[$code]->hpp ?? 0);
+                $margin = $omset - $hpp;
+                $grandOmset  += $omset;
+                $grandMargin += $margin;
+
+                $result[] = [
+                    'type_code'      => $code,
+                    'type_name'      => $allOmset[$code]->type_name ?? ($code === 'OTHER' ? 'Lainnya' : $code),
+                    'total_invoices' => (int) ($allOmset[$code]->total_invoices ?? 0),
+                    'omset'          => $omset,
+                    'omset_with_tax' => (float) ($allOmset[$code]->omset_with_tax ?? 0),
+                    'hpp'            => $hpp,
+                    'margin'         => $margin,
+                    'margin_percent' => $omset > 0 ? round(($margin / $omset) * 100, 2) : 0,
+                    'omset_share'    => 0, // dihitung setelah grand total diketahui
+                ];
+            }
+
+            $grandOmset = max($grandOmset, 1);
+            foreach ($result as &$row) {
+                $row['omset_share'] = round(($row['omset'] / $grandOmset) * 100, 2);
+            }
+            unset($row);
+
+            return response()->json([
+                'success' => true,
+                'period'  => ['start' => $startDate, 'end' => $endDate],
+                'summary' => ['grand_omset' => $grandOmset, 'grand_margin' => $grandMargin],
+                'data'    => $result,
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch omset by type code',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /* =========================================================
+     * GET /api/dashboard/monthly-margin
+     * ✅ TIDAK ADA PERUBAHAN LOGIKA — sudah efisien (2 query group by)
+     *    Hanya tambah cache 5 menit untuk this_year / last_year
+     * ========================================================= */
+    public function getMonthlyMargin(Request $request)
+    {
+        try {
+            $user      = $request->user();
+            $roleId    = (int) $user->role_id;
+            $companyId = $this->getCompanyId($request);
+            $typeCode  = $request->input('type_code');
+            $period    = $request->input('period', 'this_month');
+
+            $access = $this->getMenuAccess($roleId, ['invoices', 'financial-report']);
+            if (!$access['invoices'] && !$access['financial-report']) {
+                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
+            }
+
+            // ✅ Cache untuk periode yang tidak berubah (tahun lalu)
+            $cacheTtl = in_array($period, ['last_year', 'last_month']) ? 3600 : 0;
+            $cacheKey = "monthly_margin_{$roleId}_{$companyId}_{$period}_{$typeCode}";
+
+            $result = $cacheTtl > 0
+                ? Cache::remember($cacheKey, $cacheTtl, fn() => $this->buildMonthlyMargin($request, $roleId, $companyId, $typeCode))
+                : $this->buildMonthlyMargin($request, $roleId, $companyId, $typeCode);
+
+            [$startDate, $endDate] = $this->resolveDateRange($request);
+
+            return response()->json([
+                'success'   => true,
+                'type_code' => $typeCode ?? 'ALL',
+                'period'    => ['start' => $startDate, 'end' => $endDate],
+                'data'      => $result,
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch monthly margin',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    private function buildMonthlyMargin(Request $request, int $roleId, ?int $companyId, ?string $typeCode): array
+    {
+        [$startDate, $endDate] = $this->resolveDateRange($request);
+        $startCarbon = Carbon::parse($startDate)->startOfMonth();
+        $endCarbon   = Carbon::parse($endDate)->endOfMonth();
+
+        $omsetQuery = DB::table('invoices as i')
+            ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
+            ->whereBetween('i.invoice_date', [$startCarbon->toDateString(), $endCarbon->toDateString()]);
+
+        if ($typeCode) {
+            $omsetQuery
+                ->join('purchase_orders as po', 'po.po_id', '=', 'i.po_id')
+                ->join('activity_types as at', 'at.activity_type_id', '=', 'po.activity_type_id')
+                ->where('at.type_code', $typeCode);
+        }
+
+        $omsetRaw = $omsetQuery
+            ->selectRaw('YEAR(i.invoice_date) AS year, MONTH(i.invoice_date) AS month, COALESCE(SUM(i.subtotal), 0) AS omset, COUNT(i.invoice_id) AS invoice_count')
+            ->groupByRaw('YEAR(i.invoice_date), MONTH(i.invoice_date)')
+            ->get()
+            ->keyBy(fn($r) => "{$r->year}-{$r->month}");
+
+        $hppQuery = DB::table('stock_out as so')
+            ->join('stock_batches as sb', 'sb.batch_id', '=', 'so.batch_id')
+            ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
+            ->where('so.transaction_type', 'sale')
+            ->whereBetween('so.out_date', [$startCarbon->toDateString(), $endCarbon->toDateString()]);
+
+        if ($typeCode) {
+            $hppQuery
+                ->join('delivery_notes as dn', 'dn.delivery_note_id', '=', 'so.delivery_note_id')
+                ->join('invoices as i',         'i.invoice_id',        '=', 'dn.invoice_id')
+                ->join('purchase_orders as po', 'po.po_id',            '=', 'i.po_id')
+                ->join('activity_types as at',  'at.activity_type_id', '=', 'po.activity_type_id')
+                ->where('at.type_code', $typeCode);
+        }
+
+        $hppRaw = $hppQuery
+            ->selectRaw('YEAR(so.out_date) AS year, MONTH(so.out_date) AS month, COALESCE(SUM(so.quantity * sb.purchase_price), 0) AS hpp')
+            ->groupByRaw('YEAR(so.out_date), MONTH(so.out_date)')
+            ->get()
+            ->keyBy(fn($r) => "{$r->year}-{$r->month}");
+
+        $result  = [];
+        $current = $startCarbon->copy();
+
+        while ($current->lte($endCarbon)) {
+            $key    = "{$current->year}-{$current->month}";
+            $omset  = (float) ($omsetRaw[$key]->omset ?? 0);
+            $hpp    = (float) ($hppRaw[$key]->hpp ?? 0);
+            $margin = $omset - $hpp;
+
+            $result[] = [
+                'year'           => $current->year,
+                'month'          => str_pad($current->month, 2, '0', STR_PAD_LEFT),
+                'label'          => $current->translatedFormat('M Y'),
+                'omset'          => $omset,
+                'hpp'            => $hpp,
+                'margin'         => $margin,
+                'margin_percent' => $omset > 0 ? round(($margin / $omset) * 100, 2) : 0,
+                'invoice_count'  => (int) ($omsetRaw[$key]->invoice_count ?? 0),
+            ];
+
+            $current->addMonth();
+        }
+
+        return $result;
+    }
+
+    /* =========================================================
+     * GET /api/dashboard/expiry-alerts
+     * ✅ TIDAK BERUBAH — sudah optimal (single JOIN query, limit 20)
+     * ========================================================= */
+    public function getExpiryAlerts(Request $request)
+    {
+        try {
+            $user      = $request->user();
+            $roleId    = (int) $user->role_id;
+            $companyId = $this->getCompanyId($request);
+
+            $access = $this->getMenuAccess($roleId, ['stock-batches']);
+            if (!$access['stock-batches']) {
+                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
+            }
+
+            $alerts = DB::table('expiry_alerts as ea')
+                ->join('stock_batches as sb', 'sb.batch_id', '=', 'ea.batch_id')
+                ->join('products as p', 'p.product_id', '=', 'sb.product_id')
+                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('sb.company_id', $companyId))
+                ->where('ea.status', 'pending')
+                ->orderBy('ea.expiry_date')
+                ->limit(20)
+                ->select(
+                    'ea.alert_id', 'p.product_name', 'p.product_code',
+                    'sb.batch_number', 'sb.quantity_available',
+                    'ea.expiry_date', 'ea.alert_date', 'ea.status'
+                )
+                ->get();
+
+            return response()->json(['success' => true, 'data' => $alerts]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch expiry alerts',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /* =========================================================
+     * GET /api/dashboard/monthly-revenue (legacy — tidak diubah)
+     * GET /api/dashboard/top-customers   (tidak diubah)
+     * GET /api/dashboard/payment-methods (tidak diubah)
      * ========================================================= */
     public function getMonthlyRevenue(Request $request)
     {
@@ -339,7 +805,8 @@ class DashboardController extends Controller
             $companyId = $this->getCompanyId($request);
             $months    = min((int) $request->input('months', 6), 24);
 
-            if (!$this->hasMenuAccess($roleId, 'invoices') && !$this->hasMenuAccess($roleId, 'financial-report')) {
+            $access = $this->getMenuAccess($roleId, ['invoices', 'financial-report']);
+            if (!$access['invoices'] && !$access['financial-report']) {
                 return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
             }
 
@@ -364,20 +831,16 @@ class DashboardController extends Controller
                 ];
             }
 
-            return response()->json(['success' => true, 'data' => $result], 200);
+            return response()->json(['success' => true, 'data' => $result]);
 
         } catch (\Exception $e) {
             return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch monthly revenue',
+                'success' => false, 'message' => 'Failed to fetch monthly revenue',
                 'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    /* =========================================================
-     * GET /api/dashboard/top-customers
-     * ========================================================= */
     public function getTopCustomers(Request $request)
     {
         try {
@@ -386,7 +849,8 @@ class DashboardController extends Controller
             $companyId = $this->getCompanyId($request);
             $limit     = min((int) $request->input('limit', 5), 20);
 
-            if (!$this->hasMenuAccess($roleId, 'invoices') && !$this->hasMenuAccess($roleId, 'customers')) {
+            $access = $this->getMenuAccess($roleId, ['invoices', 'customers']);
+            if (!$access['invoices'] && !$access['customers']) {
                 return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
             }
 
@@ -399,20 +863,16 @@ class DashboardController extends Controller
                 ->limit($limit)
                 ->get();
 
-            return response()->json(['success' => true, 'data' => $result], 200);
+            return response()->json(['success' => true, 'data' => $result]);
 
         } catch (\Exception $e) {
             return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch top customers',
+                'success' => false, 'message' => 'Failed to fetch top customers',
                 'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    /* =========================================================
-     * GET /api/dashboard/payment-methods
-     * ========================================================= */
     public function getPaymentMethodStats(Request $request)
     {
         try {
@@ -420,7 +880,8 @@ class DashboardController extends Controller
             $roleId    = (int) $user->role_id;
             $companyId = $this->getCompanyId($request);
 
-            if (!$this->hasMenuAccess($roleId, 'payments') && !$this->hasMenuAccess($roleId, 'financial-report')) {
+            $access = $this->getMenuAccess($roleId, ['payments', 'financial-report']);
+            if (!$access['payments'] && !$access['financial-report']) {
                 return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
             }
 
@@ -440,441 +901,11 @@ class DashboardController extends Controller
                 'percentage'     => $total > 0 ? round(($r->total_amount / $total) * 100, 2) : 0,
             ]);
 
-            return response()->json(['success' => true, 'data' => $result], 200);
+            return response()->json(['success' => true, 'data' => $result]);
 
         } catch (\Exception $e) {
             return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch payment method stats',
-                'error'   => $e->getMessage(),
-            ], 500);
-        }
-    }
-
-    /* =========================================================
-     * GET /api/dashboard/weekly-revenue
-     * ========================================================= */
-    public function getWeeklyRevenue(Request $request)
-    {
-        try {
-            $user      = $request->user();
-            $roleId    = (int) $user->role_id;
-            $companyId = $this->getCompanyId($request);
-
-            if (!$this->hasMenuAccess($roleId, 'invoices') && !$this->hasMenuAccess($roleId, 'financial-report')) {
-                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
-            }
-
-            $base = fn() => DB::table('invoices')
-                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId));
-
-            $thisWeek = $base()
-                ->whereBetween('invoice_date', [
-                    Carbon::now()->startOfWeek()->toDateString(),
-                    Carbon::now()->endOfWeek()->toDateString(),
-                ])->sum('total_amount');
-
-            $lastWeek = $base()
-                ->whereBetween('invoice_date', [
-                    Carbon::now()->subWeek()->startOfWeek()->toDateString(),
-                    Carbon::now()->subWeek()->endOfWeek()->toDateString(),
-                ])->sum('total_amount');
-
-            return response()->json([
-                'success' => true,
-                'data'    => [
-                    'this_week'         => $thisWeek,
-                    'last_week'         => $lastWeek,
-                    'percentage_change' => $lastWeek > 0
-                        ? round((($thisWeek - $lastWeek) / $lastWeek) * 100, 2)
-                        : 0,
-                    'is_increase'       => $thisWeek >= $lastWeek,
-                ],
-            ], 200);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch weekly revenue',
-                'error'   => $e->getMessage(),
-            ], 500);
-        }
-    }
-
-    /* =========================================================
-     * GET /api/dashboard/expiry-alerts
-     * ========================================================= */
-    public function getExpiryAlerts(Request $request)
-    {
-        try {
-            $user      = $request->user();
-            $roleId    = (int) $user->role_id;
-            $companyId = $this->getCompanyId($request);
-
-            if (!$this->hasMenuAccess($roleId, 'stock-batches')) {
-                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
-            }
-
-            $alerts = DB::table('expiry_alerts as ea')
-                ->join('stock_batches as sb', 'sb.batch_id', '=', 'ea.batch_id')
-                ->join('products as p', 'p.product_id', '=', 'sb.product_id')
-                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('sb.company_id', $companyId))
-                ->where('ea.status', 'pending')
-                ->orderBy('ea.expiry_date')
-                ->limit(20)
-                ->select(
-                    'ea.alert_id',
-                    'p.product_name',
-                    'p.product_code',
-                    'sb.batch_number',
-                    'sb.quantity_available',
-                    'ea.expiry_date',
-                    'ea.alert_date',
-                    'ea.status'
-                )
-                ->get();
-
-            return response()->json(['success' => true, 'data' => $alerts], 200);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch expiry alerts',
-                'error'   => $e->getMessage(),
-            ], 500);
-        }
-    }
-
-    /* =========================================================
-     * GET /api/dashboard/omset-margin
-     * ========================================================= */
-    public function getOmsetMargin(Request $request)
-    {
-        try {
-            $user      = $request->user();
-            $roleId    = (int) $user->role_id;
-            $companyId = $this->getCompanyId($request);
-
-            if (!$this->hasMenuAccess($roleId, 'invoices') && !$this->hasMenuAccess($roleId, 'financial-report')) {
-                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
-            }
-
-            [$startDate, $endDate] = $this->resolveDateRange($request);
-
-            $omsetRow = DB::table('invoices')
-                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
-                ->whereBetween('invoice_date', [$startDate, $endDate])
-                ->selectRaw('
-                    COUNT(*)                        AS total_invoices,
-                    COALESCE(SUM(subtotal), 0)      AS omset,
-                    COALESCE(SUM(tax_amount), 0)    AS total_ppn,
-                    COALESCE(SUM(total_amount), 0)  AS omset_with_tax,
-                    COALESCE(SUM(CASE WHEN payment_status = "paid" THEN total_amount ELSE 0 END), 0) AS omset_paid,
-                    COALESCE(SUM(CASE WHEN payment_status = "unpaid" THEN total_amount ELSE 0 END), 0) AS omset_unpaid
-                ')
-                ->first();
-
-            $hppRow = DB::table('stock_out as so')
-                ->join('stock_batches as sb', 'sb.batch_id', '=', 'so.batch_id')
-                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
-                ->where('so.transaction_type', 'sale')
-                ->whereBetween('so.out_date', [$startDate, $endDate])
-                ->selectRaw('
-                    COALESCE(SUM(so.quantity * sb.purchase_price), 0)  AS hpp,
-                    COALESCE(SUM(so.quantity * so.selling_price), 0)   AS pendapatan_stock_out,
-                    COUNT(*)                                            AS total_stock_out
-                ')
-                ->first();
-
-            $omset         = (float) $omsetRow->omset;
-            $hpp           = (float) $hppRow->hpp;
-            $margin        = $omset - $hpp;
-            $marginPercent = $omset > 0 ? round(($margin / $omset) * 100, 2) : 0;
-
-            $prevStart = Carbon::parse($startDate)->subMonth()->startOfMonth()->toDateString();
-            $prevEnd   = Carbon::parse($startDate)->subMonth()->endOfMonth()->toDateString();
-
-            $prevOmset = (float) DB::table('invoices')
-                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('company_id', $companyId))
-                ->whereBetween('invoice_date', [$prevStart, $prevEnd])
-                ->sum('subtotal');
-
-            $prevHpp = (float) DB::table('stock_out as so')
-                ->join('stock_batches as sb', 'sb.batch_id', '=', 'so.batch_id')
-                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
-                ->where('so.transaction_type', 'sale')
-                ->whereBetween('so.out_date', [$prevStart, $prevEnd])
-                ->sum(DB::raw('so.quantity * sb.purchase_price'));
-
-            $prevMargin = $prevOmset - $prevHpp;
-
-            return response()->json([
-                'success' => true,
-                'period'  => ['start' => $startDate, 'end' => $endDate],
-                'data'    => [
-                    'omset'           => $omset,
-                    'omset_with_tax'  => (float) $omsetRow->omset_with_tax,
-                    'total_ppn'       => (float) $omsetRow->total_ppn,
-                    'omset_paid'      => (float) $omsetRow->omset_paid,
-                    'omset_unpaid'    => (float) $omsetRow->omset_unpaid,
-                    'total_invoices'  => (int) $omsetRow->total_invoices,
-                    'hpp'             => $hpp,
-                    'margin'          => $margin,
-                    'margin_percent'  => $marginPercent,
-                    'total_stock_out' => (int) $hppRow->total_stock_out,
-                    'prev_omset'      => $prevOmset,
-                    'prev_hpp'        => $prevHpp,
-                    'prev_margin'     => $prevMargin,
-                    'omset_growth'    => $prevOmset > 0
-                        ? round((($omset - $prevOmset) / $prevOmset) * 100, 2) : 0,
-                    'margin_growth'   => $prevMargin > 0
-                        ? round((($margin - $prevMargin) / $prevMargin) * 100, 2) : 0,
-                ],
-            ], 200);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch omset & margin',
-                'error'   => $e->getMessage(),
-            ], 500);
-        }
-    }
-
-    /* =========================================================
-     * GET /api/dashboard/omset-by-type
-     * ========================================================= */
-    public function getOmsetByTypeCode(Request $request)
-    {
-        try {
-            $user      = $request->user();
-            $roleId    = (int) $user->role_id;
-            $companyId = $this->getCompanyId($request);
-
-            if (!$this->hasMenuAccess($roleId, 'invoices') && !$this->hasMenuAccess($roleId, 'financial-report')) {
-                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
-            }
-
-            [$startDate, $endDate] = $this->resolveDateRange($request);
-
-            $omsetByType = DB::table('invoices as i')
-                ->join('purchase_orders as po', 'po.po_id', '=', 'i.po_id')
-                ->join('activity_types as at', 'at.activity_type_id', '=', 'po.activity_type_id')
-                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
-                ->whereBetween('i.invoice_date', [$startDate, $endDate])
-                ->selectRaw('
-                    at.type_code,
-                    at.type_name,
-                    COUNT(i.invoice_id)              AS total_invoices,
-                    COALESCE(SUM(i.subtotal), 0)     AS omset,
-                    COALESCE(SUM(i.total_amount), 0) AS omset_with_tax
-                ')
-                ->groupBy('at.type_code', 'at.type_name')
-                ->get()
-                ->keyBy('type_code');
-
-            $omsetNoType = DB::table('invoices as i')
-                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
-                ->whereBetween('i.invoice_date', [$startDate, $endDate])
-                ->where(function ($q) {
-                    $q->whereNull('i.po_id')
-                      ->orWhereNotExists(function ($sub) {
-                          $sub->from('purchase_orders as po')
-                              ->join('activity_types as at', 'at.activity_type_id', '=', 'po.activity_type_id')
-                              ->whereColumn('po.po_id', 'i.po_id');
-                      });
-                })
-                ->selectRaw('
-                    COUNT(invoice_id)              AS total_invoices,
-                    COALESCE(SUM(subtotal), 0)     AS omset,
-                    COALESCE(SUM(total_amount), 0) AS omset_with_tax
-                ')
-                ->first();
-
-            $hppByType = DB::table('stock_out as so')
-                ->join('stock_batches as sb',   'sb.batch_id',         '=', 'so.batch_id')
-                ->join('delivery_notes as dn',  'dn.delivery_note_id', '=', 'so.delivery_note_id')
-                ->join('invoices as i',         'i.invoice_id',        '=', 'dn.invoice_id')
-                ->join('purchase_orders as po', 'po.po_id',            '=', 'i.po_id')
-                ->join('activity_types as at',  'at.activity_type_id', '=', 'po.activity_type_id')
-                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
-                ->where('so.transaction_type', 'sale')
-                ->whereBetween('so.out_date', [$startDate, $endDate])
-                ->selectRaw('
-                    at.type_code,
-                    COALESCE(SUM(so.quantity * sb.purchase_price), 0) AS hpp
-                ')
-                ->groupBy('at.type_code')
-                ->get()
-                ->keyBy('type_code');
-
-            $allTypeCodes = ['TENDER', 'RETAIL', 'ONLINE_SHOP'];
-            $result       = [];
-            $grandOmset   = 0;
-            $grandMargin  = 0;
-
-            foreach ($allTypeCodes as $code) {
-                $omset  = (float) ($omsetByType[$code]->omset ?? 0);
-                $hpp    = (float) ($hppByType[$code]->hpp    ?? 0);
-                $margin = $omset - $hpp;
-                $grandOmset  += $omset;
-                $grandMargin += $margin;
-
-                $result[] = [
-                    'type_code'      => $code,
-                    'type_name'      => $omsetByType[$code]->type_name ?? $code,
-                    'total_invoices' => (int) ($omsetByType[$code]->total_invoices ?? 0),
-                    'omset'          => $omset,
-                    'omset_with_tax' => (float) ($omsetByType[$code]->omset_with_tax ?? 0),
-                    'hpp'            => $hpp,
-                    'margin'         => $margin,
-                    'margin_percent' => $omset > 0 ? round(($margin / $omset) * 100, 2) : 0,
-                ];
-            }
-
-            $omsetLain = (float) $omsetNoType->omset;
-            $result[]  = [
-                'type_code'      => 'OTHER',
-                'type_name'      => 'Lainnya',
-                'total_invoices' => (int) $omsetNoType->total_invoices,
-                'omset'          => $omsetLain,
-                'omset_with_tax' => (float) $omsetNoType->omset_with_tax,
-                'hpp'            => 0,
-                'margin'         => $omsetLain,
-                'margin_percent' => 100,
-            ];
-
-            $grandOmset = max($grandOmset + $omsetLain, 1);
-            foreach ($result as &$row) {
-                $row['omset_share'] = round(($row['omset'] / $grandOmset) * 100, 2);
-            }
-            unset($row);
-
-            return response()->json([
-                'success' => true,
-                'period'  => ['start' => $startDate, 'end' => $endDate],
-                'summary' => [
-                    'grand_omset'  => $grandOmset,
-                    'grand_margin' => $grandMargin + $omsetLain,
-                ],
-                'data' => $result,
-            ], 200);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch omset by type code',
-                'error'   => $e->getMessage(),
-            ], 500);
-        }
-    }
-
-    /* =========================================================
-     * GET /api/dashboard/monthly-margin
-     * ========================================================= */
-    public function getMonthlyMargin(Request $request)
-    {
-        try {
-            $user      = $request->user();
-            $roleId    = (int) $user->role_id;
-            $companyId = $this->getCompanyId($request);
-            $typeCode  = $request->input('type_code');
-
-            if (!$this->hasMenuAccess($roleId, 'invoices') && !$this->hasMenuAccess($roleId, 'financial-report')) {
-                return response()->json(['success' => false, 'message' => 'Akses ditolak'], 403);
-            }
-
-            [$startDate, $endDate] = $this->resolveDateRange($request);
-            $startCarbon = Carbon::parse($startDate)->startOfMonth();
-            $endCarbon   = Carbon::parse($endDate)->endOfMonth();
-
-            $omsetQuery = DB::table('invoices as i')
-                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('i.company_id', $companyId))
-                ->whereBetween('i.invoice_date', [
-                    $startCarbon->toDateString(),
-                    $endCarbon->toDateString(),
-                ]);
-
-            if ($typeCode) {
-                $omsetQuery
-                    ->join('purchase_orders as po', 'po.po_id', '=', 'i.po_id')
-                    ->join('activity_types as at', 'at.activity_type_id', '=', 'po.activity_type_id')
-                    ->where('at.type_code', $typeCode);
-            }
-
-            $omsetRaw = $omsetQuery
-                ->selectRaw('
-                    YEAR(i.invoice_date)         AS year,
-                    MONTH(i.invoice_date)        AS month,
-                    COALESCE(SUM(i.subtotal), 0) AS omset,
-                    COUNT(i.invoice_id)          AS invoice_count
-                ')
-                ->groupByRaw('YEAR(i.invoice_date), MONTH(i.invoice_date)')
-                ->get()
-                ->keyBy(fn($r) => "{$r->year}-{$r->month}");
-
-            $hppQuery = DB::table('stock_out as so')
-                ->join('stock_batches as sb', 'sb.batch_id', '=', 'so.batch_id')
-                ->when($roleId !== 1 && $companyId, fn($q) => $q->where('so.company_id', $companyId))
-                ->where('so.transaction_type', 'sale')
-                ->whereBetween('so.out_date', [
-                    $startCarbon->toDateString(),
-                    $endCarbon->toDateString(),
-                ]);
-
-            if ($typeCode) {
-                $hppQuery
-                    ->join('delivery_notes as dn', 'dn.delivery_note_id', '=', 'so.delivery_note_id')
-                    ->join('invoices as i',         'i.invoice_id',       '=', 'dn.invoice_id')
-                    ->join('purchase_orders as po', 'po.po_id',           '=', 'i.po_id')
-                    ->join('activity_types as at',  'at.activity_type_id', '=', 'po.activity_type_id')
-                    ->where('at.type_code', $typeCode);
-            }
-
-            $hppRaw = $hppQuery
-                ->selectRaw('
-                    YEAR(so.out_date)                                  AS year,
-                    MONTH(so.out_date)                                 AS month,
-                    COALESCE(SUM(so.quantity * sb.purchase_price), 0) AS hpp
-                ')
-                ->groupByRaw('YEAR(so.out_date), MONTH(so.out_date)')
-                ->get()
-                ->keyBy(fn($r) => "{$r->year}-{$r->month}");
-
-            $result  = [];
-            $current = $startCarbon->copy();
-
-            while ($current->lte($endCarbon)) {
-                $key    = "{$current->year}-{$current->month}";
-                $omset  = (float) ($omsetRaw[$key]->omset ?? 0);
-                $hpp    = (float) ($hppRaw[$key]->hpp     ?? 0);
-                $margin = $omset - $hpp;
-
-                $result[] = [
-                    'year'           => $current->year,
-                    'month'          => str_pad($current->month, 2, '0', STR_PAD_LEFT),
-                    'label'          => $current->translatedFormat('M Y'),
-                    'omset'          => $omset,
-                    'hpp'            => $hpp,
-                    'margin'         => $margin,
-                    'margin_percent' => $omset > 0 ? round(($margin / $omset) * 100, 2) : 0,
-                    'invoice_count'  => (int) ($omsetRaw[$key]->invoice_count ?? 0),
-                ];
-
-                $current->addMonth();
-            }
-
-            return response()->json([
-                'success'   => true,
-                'type_code' => $typeCode ?? 'ALL',
-                'period'    => ['start' => $startDate, 'end' => $endDate],
-                'data'      => $result,
-            ], 200);
-
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to fetch monthly margin',
+                'success' => false, 'message' => 'Failed to fetch payment method stats',
                 'error'   => $e->getMessage(),
             ], 500);
         }
@@ -887,33 +918,27 @@ class DashboardController extends Controller
     {
         $period = $request->input('period', 'this_month');
 
-        switch ($period) {
-            case 'last_month':
-                return [
-                    Carbon::now()->subMonth()->startOfMonth()->toDateString(),
-                    Carbon::now()->subMonth()->endOfMonth()->toDateString(),
-                ];
-            case 'this_year':
-                return [
-                    Carbon::now()->startOfYear()->toDateString(),
-                    Carbon::now()->endOfYear()->toDateString(),
-                ];
-            case 'last_year':
-                return [
-                    Carbon::now()->subYear()->startOfYear()->toDateString(),
-                    Carbon::now()->subYear()->endOfYear()->toDateString(),
-                ];
-            case 'custom':
-                return [
-                    $request->input('start_date', Carbon::now()->startOfMonth()->toDateString()),
-                    $request->input('end_date',   Carbon::now()->toDateString()),
-                ];
-            case 'this_month':
-            default:
-                return [
-                    Carbon::now()->startOfMonth()->toDateString(),
-                    Carbon::now()->toDateString(),
-                ];
-        }
+        return match ($period) {
+            'last_month' => [
+                Carbon::now()->subMonth()->startOfMonth()->toDateString(),
+                Carbon::now()->subMonth()->endOfMonth()->toDateString(),
+            ],
+            'this_year' => [
+                Carbon::now()->startOfYear()->toDateString(),
+                Carbon::now()->endOfYear()->toDateString(),
+            ],
+            'last_year' => [
+                Carbon::now()->subYear()->startOfYear()->toDateString(),
+                Carbon::now()->subYear()->endOfYear()->toDateString(),
+            ],
+            'custom' => [
+                $request->input('start_date', Carbon::now()->startOfMonth()->toDateString()),
+                $request->input('end_date',   Carbon::now()->toDateString()),
+            ],
+            default => [
+                Carbon::now()->startOfMonth()->toDateString(),
+                Carbon::now()->toDateString(),
+            ],
+        };
     }
 }

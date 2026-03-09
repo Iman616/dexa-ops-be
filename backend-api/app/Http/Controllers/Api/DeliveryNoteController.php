@@ -469,93 +469,127 @@ class DeliveryNoteController extends BaseController  // ✅ extends BaseControll
      * ✅ FIXED: Issue method dengan proper error handling
      * POST /api/delivery-notes/{id}/issue
      */
-    public function issue(Request $request, $id)
-    {
-        $companyId = $this->getCompanyId($request); // ✅
+   /**
+ * Issue Delivery Note — dengan upload signature image
+ * POST /api/delivery-notes/{id}/issue
+ */
+public function issue(Request $request, $id)
+{
+    $companyId = $this->getCompanyId($request);
 
-        $deliveryNote = DeliveryNote::with(['items.product', 'company', 'invoice.items'])
-            ->where('company_id', $companyId) // ✅ guard
-            ->find($id);
+    $deliveryNote = DeliveryNote::with(['items.product', 'company', 'invoice.items'])
+        ->where('company_id', $companyId)
+        ->find($id);
 
-        if (!$deliveryNote) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Delivery note tidak ditemukan'
-            ], 404);
+    if (!$deliveryNote) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Delivery note tidak ditemukan',
+        ], 404);
+    }
+
+    if ($deliveryNote->status !== 'draft') {
+        return response()->json([
+            'success' => false,
+            'message' => 'Hanya delivery note dengan status draft yang bisa di-issue',
+        ], 422);
+    }
+
+    // ✅ Validasi — signature_image required, pola sama dengan PO Controller
+    $validator = Validator::make($request->all(), [
+        'signed_name'     => 'required|string|max:100',
+        'signed_position' => 'required|string|max:100',
+        'signed_city'     => 'required|string|max:100',
+        'signature_image' => 'required|image|mimes:png,jpg,jpeg|max:2048',
+        'out_date'        => 'nullable|date',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Validation error',
+            'errors'  => $validator->errors(),
+        ], 422);
+    }
+
+    DB::beginTransaction();
+
+    try {
+        // ✅ Upload signature ke storage/public/signatures/delivery_notes/
+        $signaturePath = null;
+        if ($request->hasFile('signature_image')) {
+            $file          = $request->file('signature_image');
+            $filename      = 'DN_' . $deliveryNote->delivery_note_id . '_' . time() . '.' . $file->getClientOriginalExtension();
+            $signaturePath = $file->storeAs('signatures/delivery_notes', $filename, 'public');
         }
 
-        if ($deliveryNote->status !== 'draft') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Hanya delivery note dengan status draft yang bisa di-issue'
-            ], 422);
+        // ✅ Hapus file signature lama kalau ada
+        if ($deliveryNote->signature_image_path && Storage::disk('public')->exists($deliveryNote->signature_image_path)) {
+            Storage::disk('public')->delete($deliveryNote->signature_image_path);
         }
 
-        $validator = Validator::make($request->all(), [
-            'signed_name' => 'required|string|max:100',
-            'signed_position' => 'required|string|max:100',
-            'signed_city' => 'required|string|max:100',
-            'out_date' => 'nullable|date',
+        $deliveryNote->update([
+            'status'               => 'issued',
+            'signed_name'          => $request->signed_name,
+            'signed_position'      => $request->signed_position,
+            'signed_city'          => $request->signed_city,
+            'signature_image_path' => $signaturePath, // ✅ TAMBAH
+            'signed_at'            => now(),
+            'issued_by'            => Auth::id(),
+            'issued_at'            => now(),
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        DB::beginTransaction();
+        $outDate        = $request->out_date ?? now()->format('Y-m-d');
+        $stockOutRecords = [];
 
         try {
-            $deliveryNote->update([
-                'status' => 'issued',
-                'signed_name' => $request->signed_name,
-                'signed_position' => $request->signed_position,
-                'signed_city' => $request->signed_city,
-                'signed_at' => now(),
-                'issued_by' => Auth::id(),
-                'issued_at' => now(),
-            ]);
-
-            $outDate = $request->out_date ?? now()->format('Y-m-d');
-
-            $stockOutRecords = [];
-            try {
-                $stockOutRecords = $this->autoCreateStockOut($deliveryNote, $outDate);
-            } catch (\Exception $e) {
-                DB::rollBack();
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Gagal membuat Stock OUT: ' . $e->getMessage()
-                ], 400);
-            }
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => "Delivery note berhasil di-issue dan " . count($stockOutRecords) . " Stock OUT berhasil dibuat",
-                'data' => [
-                    'delivery_note' => $deliveryNote->fresh(['items', 'company']),
-                    'stock_out_records' => $stockOutRecords
-                ]
-            ], 200);
+            $stockOutRecords = $this->autoCreateStockOut($deliveryNote, $outDate);
         } catch (\Exception $e) {
             DB::rollBack();
 
-            Log::error('Issue Delivery Note Error: ' . $e->getMessage(), [
-                'delivery_note_id' => $id,
-                'trace' => $e->getTraceAsString()
-            ]);
+            // ✅ Hapus file yang sudah terupload kalau stock out gagal
+            if ($signaturePath && Storage::disk('public')->exists($signaturePath)) {
+                Storage::disk('public')->delete($signaturePath);
+            }
 
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal meng-issue delivery note',
-                'error' => $e->getMessage()
-            ], 500);
+                'message' => 'Gagal membuat Stock OUT: ' . $e->getMessage(),
+            ], 400);
         }
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Delivery note berhasil di-issue dan ' . count($stockOutRecords) . ' Stock OUT berhasil dibuat',
+            'data'    => [
+                'delivery_note'      => $deliveryNote->fresh(['items', 'company']),
+                'stock_out_records'  => $stockOutRecords,
+            ],
+        ], 200);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+
+        // ✅ Cleanup file kalau ada exception tak terduga
+        if (!empty($signaturePath) && Storage::disk('public')->exists($signaturePath)) {
+            Storage::disk('public')->delete($signaturePath);
+        }
+
+        Log::error('Issue Delivery Note Error: ' . $e->getMessage(), [
+            'delivery_note_id' => $id,
+            'trace'            => $e->getTraceAsString(),
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal meng-issue delivery note',
+            'error'   => $e->getMessage(),
+        ], 500);
     }
+}
+
 
     /**
      * Create delivery note from approved purchase order

@@ -341,6 +341,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::prefix('supplier-invoices')->middleware('auth:sanctum')->group(function () {
         // Draft invoices
+        Route::get('supplier-invoices/{id}/download-tax', [SupplierInvoiceController::class, 'downloadTaxInvoiceFile']);
+
         Route::get('/draft', [SupplierInvoiceController::class, 'getDraftInvoices']); // ✅ NEW
         Route::post('/{id}/issue', [SupplierInvoiceController::class, 'issueDraftInvoice']); // ✅ NEW
         Route::delete('/{id}/draft', [SupplierInvoiceController::class, 'deleteDraftInvoice']); // ✅ NEW
@@ -387,25 +389,42 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
 
-    // Purchase Orders
-    Route::prefix('purchase-orders')->group(function () {
-        Route::get('/generate-number', [PurchaseOrderController::class, 'generateNumber']);
+  // ==================== PURCHASE ORDERS ====================
+Route::prefix('purchase-orders')->group(function () {
 
-        Route::post('/check-stock', [PurchaseOrderController::class, 'checkStock']); // ✅ NEW
-        Route::get('/', [PurchaseOrderController::class, 'index']);
-        Route::post('/', [PurchaseOrderController::class, 'store']);
-        Route::get('/{id}', [PurchaseOrderController::class, 'show']);
-        Route::put('/{id}', [PurchaseOrderController::class, 'update']);
-        Route::delete('/{id}', [PurchaseOrderController::class, 'destroy']);
-        Route::post('/{id}/issue', [PurchaseOrderController::class, 'issue']);
-        Route::post('/{id}/status', [PurchaseOrderController::class, 'updateStatus']);
-        Route::get('/{id}/pdf', [PurchaseOrderController::class, 'generatePdf']);
-        Route::post('/{id}/upload-customer-po', [PurchaseOrderController::class, 'uploadPoCustomerFile']);
-        Route::get('/{id}/download-customer-po', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
+    // ── Static routes (HARUS di atas /{id}) ──────────────────────────────
+    Route::get('/generate-number', [PurchaseOrderController::class, 'generateNumber']);
+    Route::post('/check-stock', [PurchaseOrderController::class, 'checkStock']);
+    Route::get('/po-list', [TenderProjectDetailController::class, 'getTenderPOs']);
 
-        Route::post('/{id}/check-shortage', [SupplierPurchaseOrderController::class, 'checkShortage']);
-        Route::post('/{id}/auto-procure', [SupplierPurchaseOrderController::class, 'autoProcure']);
-    });
+    // ── CRUD ─────────────────────────────────────────────────────────────
+    Route::get('/', [PurchaseOrderController::class, 'index']);
+    Route::post('/', [PurchaseOrderController::class, 'store']);
+    Route::get('/{id}', [PurchaseOrderController::class, 'show']);
+    Route::put('/{id}', [PurchaseOrderController::class, 'update']);
+    Route::delete('/{id}', [PurchaseOrderController::class, 'destroy']);
+
+    // ── Actions ───────────────────────────────────────────────────────────
+    Route::post('/{id}/issue', [PurchaseOrderController::class, 'issue']);
+    Route::patch('/{id}/status', [PurchaseOrderController::class, 'updateStatus']);
+    Route::post('/{id}/process', [PurchaseOrderController::class, 'process']); // ✅ FIX
+
+    // ── File ──────────────────────────────────────────────────────────────
+    Route::get('/{id}/pdf', [PurchaseOrderController::class, 'generatePdf']);
+    Route::get('/{id}/po-file', [PurchaseOrderController::class, 'downloadPoFile']);
+    Route::post('/{id}/upload-po-customer', [PurchaseOrderController::class, 'uploadPoCustomerFile']);
+    Route::get('/{id}/po-customer-file', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
+    // backward compat alias
+    Route::post('/{id}/upload-customer-po', [PurchaseOrderController::class, 'uploadPoCustomerFile']);
+    Route::get('/{id}/download-customer-po', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
+
+    // ── Stock ─────────────────────────────────────────────────────────────
+    Route::get('/{id}/validate-stock', [PurchaseOrderController::class, 'validateStock']);
+    Route::post('/{id}/check-shortage', [SupplierPurchaseOrderController::class, 'checkShortage']);
+    Route::post('/{id}/auto-procure', [SupplierPurchaseOrderController::class, 'autoProcure']);
+
+})->where(['id' => '[0-9]+']); // ✅ Constraint biar {id} tidak tangkap static routes
+
 
     Route::prefix('tender-documents')->middleware(['auth:sanctum'])->group(function () {
         Route::get('/', [TenderDocumentController::class, 'index']);

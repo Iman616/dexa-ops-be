@@ -31,6 +31,14 @@ class InternalNotification extends Model
         'read_at'      => 'datetime',
     ];
 
+    /**
+     * Type yang HANYA ditangani PONotificationBell — tidak boleh masuk Header badge.
+     */
+    public const PO_ONLY_TYPES = [
+        'goods_received',
+        'goods_received_from_po',
+    ];
+
     /* ─── Relationships ─── */
 
     public function user()
@@ -55,12 +63,29 @@ class InternalNotification extends Model
         return $q->where('type', $type);
     }
 
+    /**
+     * ✅ Scope baru: exclude type yang sudah ditangani PONotificationBell.
+     * Dipakai untuk badge & list di Header global.
+     */
+    public function scopeExcludePoTypes($q)
+    {
+        return $q->whereNotIn('type', self::PO_ONLY_TYPES);
+    }
+
+    /**
+     * ✅ Scope baru: hanya type PO — untuk PONotificationBell.
+     */
+    public function scopeOnlyPoTypes($q)
+    {
+        return $q->whereIn('type', self::PO_ONLY_TYPES);
+    }
+
     /* ─── Helpers ─── */
 
     public function markAsRead(): void
     {
         if (!$this->read_at) {
-            $this->update(['read_at' => now()]);
+            $this->update(['read_at' => now(), 'status' => 'read']);
         }
     }
 

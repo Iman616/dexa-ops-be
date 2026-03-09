@@ -76,8 +76,8 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
                 'activityType',
                 fn($q) =>
                 $isTender
-                    ? $q->where('type_code', 'TENDER')
-                    : $q->where('type_code', '!=', 'TENDER')
+                ? $q->where('type_code', 'TENDER')
+                : $q->where('type_code', '!=', 'TENDER')
             );
         }
 
@@ -101,7 +101,7 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
             $query->where('po_date', '<=', $request->date_to);
         }
 
-        $sortBy    = $request->get('sort_by', 'po_id');
+        $sortBy = $request->get('sort_by', 'po_id');
         $sortOrder = $request->get('sort_order', 'desc');
         $query->orderBy($sortBy, $sortOrder);
 
@@ -109,13 +109,13 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
             $query->orderBy('po_id', 'desc');
         }
 
-        $perPage       = $request->get('per_page', 15);
+        $perPage = $request->get('per_page', 15);
         $purchaseOrders = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
             'message' => 'Purchase orders retrieved successfully',
-            'data'    => $purchaseOrders,
+            'data' => $purchaseOrders,
         ], 200);
     }
 
@@ -132,27 +132,27 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
         }
 
         $validator = Validator::make($request->all(), [
-            'customer_id'              => 'required|exists:customers,customer_id',
-            'quotation_id'             => 'nullable|exists:quotations,quotation_id',
-            'activity_type_id'         => 'nullable|exists:activity_types,activity_type_id',
-            'po_number'                => 'required|string|max:100|unique:purchase_orders,po_number',
-            'po_date'                  => 'required|date',
-            'valid_until'              => 'required|string|max:200',
-            'po_file'                  => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
-            'status'                   => 'nullable|in:draft,issued,sent,approved,processing,completed,cancelled,expired',
-            'notes'                    => 'nullable|string',
-            'items'                    => 'required|array|min:1',
-            'items.*.product_id'       => 'nullable|exists:products,product_id',
-            'items.*.product_name'     => 'required|string|max:255',
-            'items.*.specification'    => 'nullable|string',
-            'items.*.quantity'         => 'required|numeric|min:0',
-            'items.*.unit'             => 'required|string|max:50',
-            'items.*.unit_price'       => 'required|numeric|min:0',
+            'customer_id' => 'required|exists:customers,customer_id',
+            'quotation_id' => 'nullable|exists:quotations,quotation_id',
+            'activity_type_id' => 'nullable|exists:activity_types,activity_type_id',
+            'po_number' => 'required|string|max:100|unique:purchase_orders,po_number',
+            'po_date' => 'required|date',
+            'valid_until' => 'required|string|max:200',
+            'po_file' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
+            'status' => 'nullable|in:draft,issued,sent,approved,processing,completed,cancelled,expired',
+            'notes' => 'nullable|string',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'nullable|exists:products,product_id',
+            'items.*.product_name' => 'required|string|max:255',
+            'items.*.specification' => 'nullable|string',
+            'items.*.quantity' => 'required|numeric|min:0',
+            'items.*.unit' => 'required|string|max:50',
+            'items.*.unit_price' => 'required|numeric|min:0',
             'items.*.discount_percent' => 'nullable|numeric|min:0|max:100',
-            'items.*.notes'            => 'nullable|string',
-            'work_package'          => 'nullable|string|max:255',
-            'activity_name'         => 'nullable|string|max:255',
-            'items.*.brand'         => 'nullable|string|max:100',
+            'items.*.notes' => 'nullable|string',
+            'work_package' => 'nullable|string|max:255',
+            'activity_name' => 'nullable|string|max:255',
+            'items.*.brand' => 'nullable|string|max:100',
             'use_ppn' => 'nullable|boolean',
         ]);
 
@@ -160,7 +160,7 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors'  => $validator->errors(),
+                'errors' => $validator->errors(),
             ], 422);
         }
 
@@ -171,44 +171,44 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
         try {
             $poFilePath = null;
             if ($request->hasFile('po_file')) {
-                $file       = $request->file('po_file');
-                $filename   = 'PO_' . time() . '_' . $file->getClientOriginalName();
+                $file = $request->file('po_file');
+                $filename = 'PO_' . time() . '_' . $file->getClientOriginalName();
                 $poFilePath = $file->storeAs('purchase_orders', $filename, 'public');
             }
 
             $totalAmount = $this->calculateTotalAmount($request->input('items'));
 
             $po = PurchaseOrder::create([
-                'company_id'       => $companyId,  // ✅ Dari session
-                'customer_id'      => $request->customer_id,
-                'quotation_id'     => $request->quotation_id,
+                'company_id' => $companyId,  // ✅ Dari session
+                'customer_id' => $request->customer_id,
+                'quotation_id' => $request->quotation_id,
                 'activity_type_id' => $request->activity_type_id,
-                'po_number'        => $request->po_number,
-                'po_date'          => $request->po_date,
-                'valid_until'      => $request->valid_until,
-                'po_file_path'     => $poFilePath,
-                'status'           => $request->status ?? 'draft',
-                'notes'            => $request->notes,
-                'total_amount'     => $totalAmount,
-                'work_package'     => $request->work_package,
-                'activity_name'    => $request->activity_name,
+                'po_number' => $request->po_number,
+                'po_date' => $request->po_date,
+                'valid_until' => $request->valid_until,
+                'po_file_path' => $poFilePath,
+                'status' => $request->status ?? 'draft',
+                'notes' => $request->notes,
+                'total_amount' => $totalAmount,
+                'work_package' => $request->work_package,
+                'activity_name' => $request->activity_name,
                 'use_ppn' => $request->boolean('use_ppn', true),
-                'created_by'       => Auth::id(),
+                'created_by' => Auth::id(),
             ]);
 
             foreach ($request->input('items') as $item) {
                 $productId = $this->resolveProductId($item);
 
                 PurchaseOrderItem::create([
-                    'po_id'            => $po->po_id,
-                    'product_id'       => $productId,
-                    'product_name'     => $item['product_name'],
-                    'specification'    => $item['specification'] ?? null,
-                    'quantity'         => $item['quantity'],
-                    'unit'             => $item['unit'] ?? 'pcs',
-                    'unit_price'       => $item['unit_price'],
+                    'po_id' => $po->po_id,
+                    'product_id' => $productId,
+                    'product_name' => $item['product_name'],
+                    'specification' => $item['specification'] ?? null,
+                    'quantity' => $item['quantity'],
+                    'unit' => $item['unit'] ?? 'pcs',
+                    'unit_price' => $item['unit_price'],
                     'discount_percent' => $item['discount_percent'] ?? 0,
-                    'notes'            => $item['notes'] ?? null,
+                    'notes' => $item['notes'] ?? null,
                 ]);
             }
 
@@ -217,9 +217,9 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
             $po->load(['company', 'customer', 'activityType', 'createdByUser', 'items']);
 
             return response()->json([
-                'success'          => true,
-                'message'          => 'Purchase order created successfully',
-                'data'             => $po,
+                'success' => true,
+                'message' => 'Purchase order created successfully',
+                'data' => $po,
                 'stock_validation' => $stockValidation,
             ], 201);
         } catch (\Exception $e) {
@@ -227,7 +227,7 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to create purchase order',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -261,7 +261,7 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
         return response()->json([
             'success' => true,
             'message' => 'Purchase order retrieved successfully',
-            'data'    => $po,
+            'data' => $po,
         ], 200);
     }
 
@@ -288,29 +288,29 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
         }
 
         $validator = Validator::make($request->all(), [
-            'customer_id'              => 'required|exists:customers,customer_id',
-            'quotation_id'             => 'nullable|exists:quotations,quotation_id',
-            'activity_type_id'         => 'nullable|exists:activity_types,activity_type_id',
-            'po_number'                => 'required|string|max:100|unique:purchase_orders,po_number,' . $id . ',po_id',
-            'po_date'                  => 'required|date',
-            'valid_until'              => 'required|string|max:200',
-            'po_file'                  => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
-            'notes'                    => 'nullable|string',
-            'items'                    => 'required|array|min:1',
-            'items.*.product_id'       => 'nullable|exists:products,product_id',
-            'items.*.product_name'     => 'required|string|max:255',
-            'items.*.specification'    => 'nullable|string',
-            'items.*.quantity'         => 'required|numeric|min:0',
-            'items.*.unit'             => 'required|string|max:50',
-            'items.*.unit_price'       => 'required|numeric|min:0',
+            'customer_id' => 'required|exists:customers,customer_id',
+            'quotation_id' => 'nullable|exists:quotations,quotation_id',
+            'activity_type_id' => 'nullable|exists:activity_types,activity_type_id',
+            'po_number' => 'required|string|max:100|unique:purchase_orders,po_number,' . $id . ',po_id',
+            'po_date' => 'required|date',
+            'valid_until' => 'required|string|max:200',
+            'po_file' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
+            'notes' => 'nullable|string',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'nullable|exists:products,product_id',
+            'items.*.product_name' => 'required|string|max:255',
+            'items.*.specification' => 'nullable|string',
+            'items.*.quantity' => 'required|numeric|min:0',
+            'items.*.unit' => 'required|string|max:50',
+            'items.*.unit_price' => 'required|numeric|min:0',
             'items.*.discount_percent' => 'nullable|numeric|min:0|max:100',
-            'items.*.notes'            => 'nullable|string',
-            'work_package'          => 'nullable|string|max:255',
-            'activity_name'         => 'nullable|string|max:255',
-            'items.*.brand'         => 'nullable|string|max:100',
+            'items.*.notes' => 'nullable|string',
+            'work_package' => 'nullable|string|max:255',
+            'activity_name' => 'nullable|string|max:255',
+            'items.*.brand' => 'nullable|string|max:100',
             'items.*.product_code' => 'nullable|string|max:100',
-            'items.*.category'     => 'nullable|string|max:100',
-            'items.*.unit'         => 'nullable|string|max:50',
+            'items.*.category' => 'nullable|string|max:100',
+            'items.*.unit' => 'nullable|string|max:50',
 
 
         ]);
@@ -319,7 +319,7 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors'  => $validator->errors(),
+                'errors' => $validator->errors(),
             ], 422);
         }
 
@@ -329,24 +329,24 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
                 if ($po->po_file_path && Storage::disk('public')->exists($po->po_file_path)) {
                     Storage::disk('public')->delete($po->po_file_path);
                 }
-                $file         = $request->file('po_file');
-                $filename     = 'PO_' . time() . '_' . $file->getClientOriginalName();
+                $file = $request->file('po_file');
+                $filename = 'PO_' . time() . '_' . $file->getClientOriginalName();
                 $po->po_file_path = $file->storeAs('purchase_orders', $filename, 'public');
             }
 
             $totalAmount = $this->calculateTotalAmount($request->input('items'));
 
             $po->update([
-                'customer_id'      => $request->customer_id,
-                'quotation_id'     => $request->quotation_id,
+                'customer_id' => $request->customer_id,
+                'quotation_id' => $request->quotation_id,
                 'activity_type_id' => $request->activity_type_id,
-                'po_number'        => $request->po_number,
-                'po_date'          => $request->po_date,
-                'valid_until'      => $request->valid_until,
-                'notes'            => $request->notes,
-                'total_amount'     => $totalAmount,
-                'work_package'     => $request->work_package,  // ← pindah ke sini (sebelumnya salah di dalam loop)
-                'activity_name'    => $request->activity_name, // ← pindah ke sini
+                'po_number' => $request->po_number,
+                'po_date' => $request->po_date,
+                'valid_until' => $request->valid_until,
+                'notes' => $request->notes,
+                'total_amount' => $totalAmount,
+                'work_package' => $request->work_package,  // ← pindah ke sini (sebelumnya salah di dalam loop)
+                'activity_name' => $request->activity_name, // ← pindah ke sini
             ]);
 
             PurchaseOrderItem::where('po_id', $po->po_id)->delete();
@@ -355,15 +355,15 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
                 $productId = $this->resolveProductId($item); // ← auto-create jika manual
 
                 PurchaseOrderItem::create([
-                    'po_id'            => $po->po_id,
-                    'product_id'       => $productId,         // ← selalu ada
-                    'product_name'     => $item['product_name'],
-                    'specification'    => $item['specification'] ?? null,
-                    'quantity'         => $item['quantity'],
-                    'unit'             => $item['unit'] ?? 'pcs',
-                    'unit_price'       => $item['unit_price'],
+                    'po_id' => $po->po_id,
+                    'product_id' => $productId,         // ← selalu ada
+                    'product_name' => $item['product_name'],
+                    'specification' => $item['specification'] ?? null,
+                    'quantity' => $item['quantity'],
+                    'unit' => $item['unit'] ?? 'pcs',
+                    'unit_price' => $item['unit_price'],
                     'discount_percent' => $item['discount_percent'] ?? 0,
-                    'notes'            => $item['notes'] ?? null,
+                    'notes' => $item['notes'] ?? null,
                     // ← work_package & activity_name DIHAPUS dari sini, bukan kolom di items
                 ]);
             }
@@ -375,14 +375,14 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
             return response()->json([
                 'success' => true,
                 'message' => 'Purchase order updated successfully',
-                'data'    => $po,
+                'data' => $po,
             ], 200);
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update purchase order',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -393,7 +393,7 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
     public function destroy(Request $request, $id)
     {
         $companyId = $this->getCompanyId($request);
-        $po        = PurchaseOrder::where('company_id', $companyId)->find($id);
+        $po = PurchaseOrder::where('company_id', $companyId)->find($id);
 
         if (!$po) {
             return response()->json(['success' => false, 'message' => 'Purchase order not found'], 404);
@@ -426,80 +426,89 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
     /* ================================================================
      * UPDATE STATUS
      * ================================================================ */
-public function updateStatus(Request $request, $id)
-{
-    $companyId = $this->getCompanyId($request);
+    public function updateStatus(Request $request, $id)
+    {
+        $companyId = $this->getCompanyId($request);
 
-    $po = PurchaseOrder::with([
-        'quotation.activityType', 'activityType', 'company', 'customer', 'items',
-    ])
-        ->where('company_id', $companyId)
-        ->find($id);
+        $po = PurchaseOrder::with([
+            'quotation.activityType',
+            'activityType',
+            'company',
+            'customer',
+            'items',
+        ])
+            ->where('company_id', $companyId)
+            ->find($id);
 
-    if (!$po) {
-        return response()->json(['success' => false, 'message' => 'Purchase order not found'], 404);
-    }
-
-    $validator = Validator::make($request->all(), [
-        'status'       => 'required|in:draft,issued,sent,approved,processing,completed,cancelled',
-        'payment_type' => 'required_if:status,approved|in:dp,full',
-        'use_ppn'      => 'nullable|boolean',  // ✅ TAMBAH
-    ]);
-
-    if ($validator->fails()) {
-        return response()->json(['success' => false, 'message' => 'Validation error', 'errors' => $validator->errors()], 422);
-    }
-
-    $oldStatus    = $po->status;
-    $newStatus    = $request->status;
-    $paymentType  = $request->input('payment_type', 'full');
-    $forceApprove = $request->boolean('force_approve', false);
-
-    // ✅ Ambil use_ppn — prioritas: dari request, fallback dari PO yg tersimpan, default true
-    $usePpn = $request->has('use_ppn')
-        ? $request->boolean('use_ppn')
-        : (bool) ($po->use_ppn ?? true);
-
-    if ($newStatus === 'approved' && $oldStatus !== 'approved') {
-        if (!$forceApprove) {
-            $validation = $po->validateStockAvailability();
-            if (!$validation['is_valid']) {
-                return response()->json([
-                    'success'          => false,
-                    'error_code'       => 'INSUFFICIENT_STOCK',
-                    'message'          => 'Stok tidak mencukupi untuk approve PO ini',
-                    'stock_validation' => $validation,
-                ], 422);
-            }
+        if (!$po) {
+            return response()->json(['success' => false, 'message' => 'Purchase order not found'], 404);
         }
-    }
 
-    DB::beginTransaction();
-    try {
-        // ✅ Simpan use_ppn ke PO juga
-        $po->update([
-            'status'  => $newStatus,
-            'use_ppn' => $usePpn,
+        $validator = Validator::make($request->all(), [
+            'status' => 'required|in:draft,issued,sent,approved,processing,completed,cancelled',
+            'payment_type' => 'required_if:status,approved|in:dp,full',
+            'use_ppn' => 'nullable|boolean',  // ✅ TAMBAH
         ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Validation error', 'errors' => $validator->errors()], 422);
+        }
+
+        $oldStatus = $po->status;
+        $newStatus = $request->status;
+        $paymentType = $request->input('payment_type', 'full');
+        $forceApprove = $request->boolean('force_approve', false);
+
+        // ✅ Ambil use_ppn — prioritas: dari request, fallback dari PO yg tersimpan, default true
+        $usePpn = $request->has('use_ppn')
+            ? $request->boolean('use_ppn')
+            : (bool) ($po->use_ppn ?? true);
 
         if ($newStatus === 'approved' && $oldStatus !== 'approved') {
-            $this->handlePOApproval($po, $paymentType, $usePpn);  // ✅ pass $usePpn
+            if (!$forceApprove) {
+                $validation = $po->validateStockAvailability();
+                if (!$validation['is_valid']) {
+                    return response()->json([
+                        'success' => false,
+                        'error_code' => 'INSUFFICIENT_STOCK',
+                        'message' => 'Stok tidak mencukupi untuk approve PO ini',
+                        'stock_validation' => $validation,
+                    ], 422);
+                }
+            }
         }
 
-        DB::commit();
+        DB::beginTransaction();
+        try {
+            // ✅ Simpan use_ppn ke PO juga
+            $po->update([
+                'status' => $newStatus,
+                'use_ppn' => $usePpn,
+            ]);
 
-        $po->load([
-            'activityType', 'tenderProject', 'bankGuarantees',
-            'tenderDocuments', 'deliveryNotes', 'proformaInvoices', 'invoices',
-        ]);
+            if ($newStatus === 'approved' && $oldStatus !== 'approved') {
+                $this->handlePOApproval($po, $paymentType, $usePpn);  // ✅ pass $usePpn
+            }
 
-        return response()->json(['success' => true, 'message' => 'Purchase order status updated successfully', 'data' => $po], 200);
+            DB::commit();
 
-    } catch (\Exception $e) {
-        DB::rollBack();
-        return response()->json(['success' => false, 'message' => 'Failed to update status', 'error' => $e->getMessage()], 500);
+            $po->load([
+                'activityType',
+                'tenderProject',
+                'bankGuarantees',
+                'tenderDocuments',
+                'deliveryNotes',
+                'proformaInvoices',
+                'invoices',
+            ]);
+
+            return response()->json(['success' => true, 'message' => 'Purchase order status updated successfully', 'data' => $po], 200);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['success' => false, 'message' => 'Failed to update status', 'error' => $e->getMessage()], 500);
+        }
     }
-}
     /* ================================================================
      * ISSUE
      * ================================================================ */
@@ -517,16 +526,16 @@ public function updateStatus(Request $request, $id)
 
         if (!in_array($po->status, ['draft', 'sent'])) {
             return response()->json([
-                'success'        => false,
-                'message'        => 'Only draft or sent purchase orders can be issued',
+                'success' => false,
+                'message' => 'Only draft or sent purchase orders can be issued',
                 'current_status' => $po->status,
             ], 422);
         }
 
         $validator = Validator::make($request->all(), [
-            'signed_name'     => 'required|string|max:100',
+            'signed_name' => 'required|string|max:100',
             'signed_position' => 'required|string|max:100',
-            'signed_city'     => 'required|string|max:50',
+            'signed_city' => 'required|string|max:50',
             'signature_image' => 'required|image|mimes:png,jpg,jpeg|max:2048',
         ]);
 
@@ -534,7 +543,7 @@ public function updateStatus(Request $request, $id)
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors'  => $validator->errors(),
+                'errors' => $validator->errors(),
             ], 422);
         }
 
@@ -550,16 +559,228 @@ public function updateStatus(Request $request, $id)
             return response()->json([
                 'success' => true,
                 'message' => 'Purchase order issued successfully',
-                'data'    => $po->load(['issuedByUser', 'company', 'customer', 'items']),
+                'data' => $po->load(['issuedByUser', 'company', 'customer', 'items']),
             ], 200);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to issue purchase order',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
+
+    // app/Http/Controllers/Api/PurchaseOrderController.php
+
+    /**
+     * POST /api/purchase-orders/{id}/process
+     *
+     * Jika stok cukup  → langsung proses PO
+     * Jika stok kurang → buat SupplierPO + (opsional) ProformaInvoice ke supplier
+     */
+    public function process(Request $request, $id)
+    {
+        $companyId = $this->getCompanyId($request);
+
+        $po = PurchaseOrder::with(['items.product', 'customer', 'company'])
+            ->where('company_id', $companyId)
+            ->find($id);
+
+        if (!$po) {
+            return response()->json(['success' => false, 'message' => 'PO tidak ditemukan'], 404);
+        }
+
+        if (!in_array($po->status, ['issued', 'approved', 'processing'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'PO harus berstatus issued, approved, atau processing untuk diproses',
+            ], 422);
+        }
+
+        $procurement = $po->getStockShortageForProcurement();
+
+        $targetStatus = ($po->status === 'processing') ? 'completed' : 'processing';
+
+        // ─── STOK CUKUP: langsung update status ──────────────────────────────
+        if (!$procurement['needs_procurement']) {
+            $po->update(['status' => $targetStatus]);
+
+            return response()->json([
+                'success' => true,
+                'message' => $targetStatus === 'completed'
+                    ? 'PO selesai, stok tersedia'
+                    : 'PO berhasil diproses, stok tersedia',
+                'needs_procurement' => false,
+                'data' => $po->fresh(),
+            ]);
+        }
+
+        // ─── STOK KURANG ─────────────────────────────────────────────────────
+        if (!$request->boolean('auto_create_supplier_po')) {
+            return response()->json([
+                'success' => false,
+                'needs_procurement' => true,
+                'message' => 'Stok tidak mencukupi.',
+                'shortage' => $procurement['issues'],
+                'target_status' => $targetStatus,  // ← kirim ke FE
+            ], 409);
+        }
+
+        // ─── AUTO-CREATE SupplierPO + ProformaInvoice ─────────────────────
+        $validator = Validator::make($request->all(), [
+            'supplier_id' => 'required|exists:suppliers,supplier_id',
+            'expected_delivery' => 'nullable|date',
+            'create_proforma' => 'nullable|boolean',   // opsional buat PI
+            'payment_type' => 'nullable|in:full,dp', // full payment atau dp
+            'dp_percentage' => 'nullable|numeric|min:1|max:100',
+            'notes' => 'nullable|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation error',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        DB::beginTransaction();
+        try {
+            $company = $po->company;
+            $supplierId = $request->supplier_id;
+
+            // ── 1. Buat SupplierPO ─────────────────────────────────────────
+            $supplierPoNumber = SupplierPurchaseOrder::generatePoNumber();
+
+            // Hitung total dari item yang shortage saja
+            $shortageProductIds = collect($procurement['issues'])->pluck('product_id');
+            $shortageItems = $po->items->whereIn('product_id', $shortageProductIds->toArray());
+
+            $subtotal = $shortageItems->sum(fn($i) => $i->quantity * $i->unit_price);
+            $taxAmount = $subtotal * 0.11;
+            $totalAmount = $subtotal + $taxAmount;
+
+            $supplierPo = SupplierPurchaseOrder::create([
+                'po_number' => $supplierPoNumber,
+                'po_id' => $po->po_id,       // link ke PO customer
+                'supplier_id' => $supplierId,
+                'company_id' => $companyId,
+                'po_date' => now()->toDateString(),
+                'expected_delivery_date' => $request->expected_delivery ?? now()->addDays(7)->toDateString(),
+                'status' => 'draft',
+                'payment_status' => 'unpaid',
+                'subtotal' => $subtotal,
+                'tax_amount' => $taxAmount,
+                'total_amount' => $totalAmount,
+                'notes' => $request->notes ?? "Pengadaan untuk PO {$po->po_number}",
+                'created_by' => Auth::id(),
+            ]);
+
+            // ── 2. Buat SupplierPO Items dari shortage ─────────────────────
+            foreach ($shortageItems as $poItem) {
+                $issue = collect($procurement['issues'])->firstWhere('product_id', $poItem->product_id);
+                $qtyNeeded = $issue['shortage']; // hanya beli kekurangannya
+
+                $supplierPo->items()->create([
+                    'product_id' => $poItem->product_id,
+                    'product_name' => $poItem->product_name,
+                    'quantity' => $qtyNeeded,
+                    'unit' => $poItem->unit,
+                    'unit_price' => $poItem->unit_price,
+                    'subtotal' => $qtyNeeded * $poItem->unit_price,
+                ]);
+            }
+
+            // ── 3. (Opsional) Buat ProformaInvoice ke supplier ────────────
+            $proforma = null;
+            if ($request->boolean('create_proforma', true)) {
+                $paymentType = $request->payment_type ?? 'full';
+                $dpPercentage = $request->dp_percentage ?? 100;
+                $proformaAmount = $paymentType === 'dp'
+                    ? $totalAmount * ($dpPercentage / 100)
+                    : $totalAmount;
+
+                $proformaNumber = $this->generateProformaNumber($companyId);
+
+                $proforma = ProformaInvoice::create([
+                    'company_id' => $companyId,
+                    'customer_id' => null,   // ini untuk supplier, bukan customer
+                    'po_id' => $po->po_id,
+                    'proforma_number' => $proformaNumber,
+                    'proforma_date' => now()->toDateString(),
+                    'valid_until' => now()->addDays(14)->toDateString(),
+                    'subtotal' => $subtotal,
+                    'tax_percentage' => 11,
+                    'tax_amount' => $taxAmount,
+                    'discount_amount' => 0,
+                    'total_amount' => $proformaAmount,
+                    'payment_terms' => $paymentType === 'dp'
+                        ? "DP {$dpPercentage}% sebelum pengiriman"
+                        : 'Pembayaran penuh sebelum pengiriman',
+                    'notes' => "PI untuk Supplier PO {$supplierPoNumber}",
+                    'status' => 'draft',
+                    'created_by' => Auth::id(),
+                ]);
+
+                // Items PI dari shortage items
+                foreach ($shortageItems as $poItem) {
+                    $issue = collect($procurement['issues'])->firstWhere('product_id', $poItem->product_id);
+                    $qtyNeeded = $issue['shortage'];
+
+                    $proforma->items()->create([
+                        'product_id' => $poItem->product_id,
+                        'product_name' => $poItem->product_name,
+                        'quantity' => $qtyNeeded,
+                        'unit' => $poItem->unit,
+                        'unit_price' => $poItem->unit_price,
+                        'subtotal' => $qtyNeeded * $poItem->unit_price,
+                    ]);
+                }
+            }
+
+            $po->update(['status' => $targetStatus]);
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'needs_procurement' => true,
+                'message' => 'PO diproses. SupplierPO' . ($proforma ? ' & Proforma Invoice' : '') . ' berhasil dibuat.',
+                'data' => [
+                    'purchase_order' => $po->fresh(),
+                    'supplier_po' => $supplierPo->load(['items', 'supplier']),
+                    'proforma' => $proforma?->load(['items']),
+                ],
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal memproses PO',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    // ── Helper generate proforma number ───────────────────────────────────
+    private function generateProformaNumber(int $companyId): string
+    {
+        $company = DB::table('companies')->where('company_id', $companyId)->first();
+        $code = $company->company_code ?? 'UNK';
+        $year = date('Y');
+        $month = date('m');
+
+        $last = ProformaInvoice::where('company_id', $companyId)
+            ->whereYear('proforma_date', $year)
+            ->whereMonth('proforma_date', $month)
+            ->orderByDesc('proforma_id')
+            ->lockForUpdate()
+            ->first();
+
+        $num = $last ? (int) substr($last->proforma_number, -5) + 1 : 1;
+        return "PI/{$code}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
+    }
+
 
     /* ================================================================
      * CHECK STOCK
@@ -570,17 +791,17 @@ public function updateStatus(Request $request, $id)
         $companyId = $this->getCompanyId($request);
 
         $validator = Validator::make($request->all(), [
-            'items'                    => 'required|array|min:1',
-            'items.*.product_id'       => 'nullable|exists:products,product_id',
-            'items.*.product_name'     => 'required|string',
-            'items.*.quantity'         => 'required|numeric|min:0',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'nullable|exists:products,product_id',
+            'items.*.product_name' => 'required|string',
+            'items.*.quantity' => 'required|numeric|min:0',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors'  => $validator->errors(),
+                'errors' => $validator->errors(),
             ], 422);
         }
 
@@ -589,7 +810,7 @@ public function updateStatus(Request $request, $id)
         return response()->json([
             'success' => true,
             'message' => 'Stock validation completed',
-            'data'    => $validation,
+            'data' => $validation,
         ], 200);
     }
 
@@ -604,7 +825,7 @@ public function updateStatus(Request $request, $id)
             'company',
             'customer',
             'quotation.activityType',
-             'items.product',
+            'items.product',
             'items',
             'issuedByUser',
             'tenderProject',
@@ -625,7 +846,7 @@ public function updateStatus(Request $request, $id)
         }
 
         try {
-            $pdfPath      = $this->pdfService->generatePurchaseOrderPdf($po);
+            $pdfPath = $this->pdfService->generatePurchaseOrderPdf($po);
             $absolutePath = Storage::disk('local')->path($pdfPath);
 
             if (!file_exists($absolutePath)) {
@@ -642,7 +863,7 @@ public function updateStatus(Request $request, $id)
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to generate PDF',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -653,7 +874,7 @@ public function updateStatus(Request $request, $id)
     public function uploadPoCustomerFile(Request $request, $id)
     {
         $companyId = $this->getCompanyId($request);
-        $po        = PurchaseOrder::where('company_id', $companyId)->find($id);
+        $po = PurchaseOrder::where('company_id', $companyId)->find($id);
 
         if (!$po) {
             return response()->json(['success' => false, 'message' => 'Purchase order not found'], 404);
@@ -661,8 +882,8 @@ public function updateStatus(Request $request, $id)
 
         if ($po->status !== 'approved') {
             return response()->json([
-                'success'        => false,
-                'message'        => 'Only approved purchase orders can upload customer PO file',
+                'success' => false,
+                'message' => 'Only approved purchase orders can upload customer PO file',
                 'current_status' => $po->status,
             ], 422);
         }
@@ -675,7 +896,7 @@ public function updateStatus(Request $request, $id)
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors'  => $validator->errors(),
+                'errors' => $validator->errors(),
             ], 422);
         }
 
@@ -690,7 +911,7 @@ public function updateStatus(Request $request, $id)
     public function downloadPoCustomerFile(Request $request, $id)
     {
         $companyId = $this->getCompanyId($request);
-        $po        = PurchaseOrder::where('company_id', $companyId)->find($id);
+        $po = PurchaseOrder::where('company_id', $companyId)->find($id);
 
         if (!$po) {
             return response()->json(['success' => false, 'message' => 'Purchase order not found'], 404);
@@ -713,8 +934,8 @@ public function updateStatus(Request $request, $id)
     private function calculateTotalAmount(array $items): float
     {
         return collect($items)->sum(function ($item) {
-            $subtotal        = floatval($item['quantity']) * floatval($item['unit_price']);
-            $discountAmount  = $subtotal * (floatval($item['discount_percent'] ?? 0) / 100);
+            $subtotal = floatval($item['quantity']) * floatval($item['unit_price']);
+            $discountAmount = $subtotal * (floatval($item['discount_percent'] ?? 0) / 100);
             return $subtotal - $discountAmount;
         });
     }
@@ -729,289 +950,294 @@ public function updateStatus(Request $request, $id)
 
         if ($productItems->isEmpty()) {
             return [
-                'is_valid'           => true,
-                'total_items'        => count($items),
+                'is_valid' => true,
+                'total_items' => count($items),
                 'insufficient_items' => 0,
-                'issues'             => [],
-                'note'               => 'Semua item adalah item custom (tanpa product)',
+                'issues' => [],
+                'note' => 'Semua item adalah item custom (tanpa product)',
             ];
         }
 
-        $stock        = StockHelper::getAvailableByProducts(
+        $stock = StockHelper::getAvailableByProducts(
             $productItems->pluck('product_id')->unique(),
             $companyId
         );
-        $issues       = [];
+        $issues = [];
         $allSufficient = true;
 
         foreach ($items as $item) {
-            if (empty($item['product_id'])) continue;
+            if (empty($item['product_id']))
+                continue;
 
             $available = (float) $stock->get($item['product_id'], 0);
-            $required  = (float) $item['quantity'];
+            $required = (float) $item['quantity'];
 
             if ($available < $required) {
                 $allSufficient = false;
                 $issues[] = [
-                    'product_id'     => $item['product_id'],
-                    'product_name'   => $item['product_name'],
-                    'required'       => $required,
-                    'available'      => $available,
-                    'shortage'       => $required - $available,
-                    'status'         => $available > 0 ? 'low' : 'out_of_stock',
+                    'product_id' => $item['product_id'],
+                    'product_name' => $item['product_name'],
+                    'required' => $required,
+                    'available' => $available,
+                    'shortage' => $required - $available,
+                    'status' => $available > 0 ? 'low' : 'out_of_stock',
                     'recommendation' => 'Buat PO Supplier untuk menambah stok',
                 ];
             }
         }
 
         return [
-            'is_valid'           => $allSufficient,
-            'total_items'        => count($items),
+            'is_valid' => $allSufficient,
+            'total_items' => count($items),
             'insufficient_items' => count($issues),
-            'issues'             => $issues,
-            'warning'            => !$allSufficient ? 'Beberapa produk stok tidak mencukupi.' : null,
+            'issues' => $issues,
+            'warning' => !$allSufficient ? 'Beberapa produk stok tidak mencukupi.' : null,
         ];
     }
 
- private function handlePOApproval(PurchaseOrder $po, string $paymentType = 'full', bool $usePpn = true): void
-{
-    if ($po->is_tender) {
-        $this->createTenderProject($po);
-    }
-
-    // ✅ Pass $usePpn ke PI dan Invoice
-    $pi = $this->autoGenerateProformaInvoice($po, $paymentType, $usePpn);
-    $this->createDeliveryNote($po);
-
-    if ($paymentType === 'full' && $pi) {
-        $this->autoGenerateInvoice($po, $pi, $usePpn);
-    }
-}
-
-
-  private function autoGenerateProformaInvoice(
-    PurchaseOrder $po,
-    string $paymentType = 'full',
-    bool $usePpn = true   // ✅ TAMBAH parameter
-): ?ProformaInvoice {
-    $sudahAdaPI = ProformaInvoice::where('po_id', $po->po_id)
-        ->whereNotIn('status', ['cancelled', 'rejected'])
-        ->exists();
-
-    if ($sudahAdaPI || $po->items->isEmpty()) return null;
-
-    try {
-      $subtotal = $po->items->reduce(function (float $carry, $item): float {
-    $gross    = (float) $item->quantity * (float) $item->unit_price;
-    $discount = $gross * ((float) ($item->discount_percent ?? 0) / 100);
-    return $carry + ($gross - $discount);
-}, 0.0);
-
-        $taxPercentage = 11;
-
-        // ✅ Hitung pajak hanya jika PPN, pakai exact fraction
-        if ($usePpn) {
-            $dpp       = round($subtotal * ($taxPercentage / ($taxPercentage + 1)));
-            $taxAmount = round($dpp * (($taxPercentage + 1) / 100));
-        } else {
-            $taxAmount = 0;
+    private function handlePOApproval(PurchaseOrder $po, string $paymentType = 'full', bool $usePpn = true): void
+    {
+        if ($po->is_tender) {
+            $this->createTenderProject($po);
         }
 
-        $totalAmount = $subtotal + $taxAmount;
+        // ✅ Pass $usePpn ke PI dan Invoice
+        $pi = $this->autoGenerateProformaInvoice($po, $paymentType, $usePpn);
+        $this->createDeliveryNote($po);
 
-        $companyCode    = $po->company?->company_code ?? 'XXX';
-        $year           = date('Y');
-        $month          = date('m');
-        $last           = ProformaInvoice::where('company_id', $po->company_id)
-            ->whereYear('proforma_date', $year)
-            ->whereMonth('proforma_date', $month)
-            ->orderByDesc('proforma_id')
-            ->lockForUpdate()
-            ->first();
-        $num            = $last ? ((int) substr($last->proforma_number, -5) + 1) : 1;
-        $proformaNumber = "PI/{$companyCode}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
+        if ($paymentType === 'full' && $pi) {
+            $this->autoGenerateInvoice($po, $pi, $usePpn);
+        }
+    }
 
-        $paymentNote = $paymentType === 'dp'
-            ? 'Pembayaran: Down Payment (DP). Invoice akan diterbitkan setelah pelunasan.'
-            : 'Pembayaran: Full Payment.';
 
-        $pi = ProformaInvoice::create([
-            'company_id'      => $po->company_id,
-            'customer_id'     => $po->customer_id,
-            'po_id'           => $po->po_id,
-            'proforma_number' => $proformaNumber,
-            'proforma_date'   => now()->format('Y-m-d'),
-            'valid_until'     => now()->addDays(30)->format('Y-m-d'),
-            'subtotal'        => $subtotal,
-            'tax_percentage'  => $taxPercentage,
-            'tax_amount'      => $taxAmount,
-            'discount_amount' => 0,
-            'total_amount'    => $totalAmount,
-            'use_ppn'         => $usePpn,   // ✅ SIMPAN
-            'payment_terms'   => $paymentType === 'dp' ? 'DP terlebih dahulu, pelunasan menyusul' : 'Full Payment',
-            'delivery_terms'  => 'FOB Destination',
-            'status'          => 'draft',
-            'notes'           => "Auto-generated dari PO {$po->po_number}. {$paymentNote}",
-            'created_by'      => Auth::id(),
-        ]);
+    private function autoGenerateProformaInvoice(
+        PurchaseOrder $po,
+        string $paymentType = 'full',
+        bool $usePpn = true   // ✅ TAMBAH parameter
+    ): ?ProformaInvoice {
+        $sudahAdaPI = ProformaInvoice::where('po_id', $po->po_id)
+            ->whereNotIn('status', ['cancelled', 'rejected'])
+            ->exists();
 
-        foreach ($po->items as $poItem) {
-            ProformaInvoiceItem::create([
-                'proforma_id'         => $pi->proforma_id,
-                'product_id'          => $poItem->product_id,
-                'product_name'        => $poItem->product_name,
-                'product_description' => $poItem->specification,
-                'quantity'            => $poItem->quantity,
-                'unit'                => $poItem->unit,
-                'unit_price'          => $poItem->unit_price,
-                'discount_percent'    => $poItem->discount_percent ?? 0,  // ✅ jangan lupa diskon
-                'notes'               => $poItem->notes,
+        if ($sudahAdaPI || $po->items->isEmpty())
+            return null;
+
+        try {
+            $subtotal = $po->items->reduce(function (float $carry, $item): float {
+                $gross = (float) $item->quantity * (float) $item->unit_price;
+                $discount = $gross * ((float) ($item->discount_percent ?? 0) / 100);
+                return $carry + ($gross - $discount);
+            }, 0.0);
+
+            $taxPercentage = 11;
+
+            // ✅ Hitung pajak hanya jika PPN, pakai exact fraction
+            if ($usePpn) {
+                $dpp = round($subtotal * ($taxPercentage / ($taxPercentage + 1)));
+                $taxAmount = round($dpp * (($taxPercentage + 1) / 100));
+            } else {
+                $taxAmount = 0;
+            }
+
+            $totalAmount = $subtotal + $taxAmount;
+
+            $companyCode = $po->company?->company_code ?? 'XXX';
+            $year = date('Y');
+            $month = date('m');
+            $last = ProformaInvoice::where('company_id', $po->company_id)
+                ->whereYear('proforma_date', $year)
+                ->whereMonth('proforma_date', $month)
+                ->orderByDesc('proforma_id')
+                ->lockForUpdate()
+                ->first();
+            $num = $last ? ((int) substr($last->proforma_number, -5) + 1) : 1;
+            $proformaNumber = "PI/{$companyCode}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
+
+            $paymentNote = $paymentType === 'dp'
+                ? 'Pembayaran: Down Payment (DP). Invoice akan diterbitkan setelah pelunasan.'
+                : 'Pembayaran: Full Payment.';
+
+            $pi = ProformaInvoice::create([
+                'company_id' => $po->company_id,
+                'customer_id' => $po->customer_id,
+                'po_id' => $po->po_id,
+                'proforma_number' => $proformaNumber,
+                'proforma_date' => now()->format('Y-m-d'),
+                'valid_until' => now()->addDays(30)->format('Y-m-d'),
+                'subtotal' => $subtotal,
+                'tax_percentage' => $taxPercentage,
+                'tax_amount' => $taxAmount,
+                'discount_amount' => 0,
+                'total_amount' => $totalAmount,
+                'use_ppn' => $usePpn,   // ✅ SIMPAN
+                'payment_terms' => $paymentType === 'dp' ? 'DP terlebih dahulu, pelunasan menyusul' : 'Full Payment',
+                'delivery_terms' => 'FOB Destination',
+                'status' => 'draft',
+                'notes' => "Auto-generated dari PO {$po->po_number}. {$paymentNote}",
+                'created_by' => Auth::id(),
             ]);
+
+            foreach ($po->items as $poItem) {
+                ProformaInvoiceItem::create([
+                    'proforma_id' => $pi->proforma_id,
+                    'product_id' => $poItem->product_id,
+                    'product_name' => $poItem->product_name,
+                    'product_description' => $poItem->specification,
+                    'quantity' => $poItem->quantity,
+                    'unit' => $poItem->unit,
+                    'unit_price' => $poItem->unit_price,
+                    'discount_percent' => $poItem->discount_percent ?? 0,  // ✅ jangan lupa diskon
+                    'notes' => $poItem->notes,
+                ]);
+            }
+
+            \Illuminate\Support\Facades\Log::info(
+                "Auto-generated PI {$pi->proforma_number} dari PO {$po->po_number} [{$paymentType}] [use_ppn=" . ($usePpn ? 'true' : 'false') . "]"
+            );
+
+            return $pi;
+
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error("Gagal auto-generate PI untuk PO {$po->po_number}: " . $e->getMessage());
+            return null;
         }
-
-        \Illuminate\Support\Facades\Log::info(
-            "Auto-generated PI {$pi->proforma_number} dari PO {$po->po_number} [{$paymentType}] [use_ppn=" . ($usePpn ? 'true' : 'false') . "]"
-        );
-
-        return $pi;
-
-    } catch (\Exception $e) {
-        \Illuminate\Support\Facades\Log::error("Gagal auto-generate PI untuk PO {$po->po_number}: " . $e->getMessage());
-        return null;
     }
-}
 
-private function autoGenerateInvoice(
-    PurchaseOrder $po,
-    ProformaInvoice $pi,
-    bool $usePpn = true   // ✅ TAMBAH parameter
-): void {
-    $sudahAda = \App\Models\Invoice::where('po_id', $po->po_id)
-        ->orWhere('proforma_invoice_id', $pi->proforma_id)
-        ->exists();
+    private function autoGenerateInvoice(
+        PurchaseOrder $po,
+        ProformaInvoice $pi,
+        bool $usePpn = true   // ✅ TAMBAH parameter
+    ): void {
+        $sudahAda = \App\Models\Invoice::where('po_id', $po->po_id)
+            ->orWhere('proforma_invoice_id', $pi->proforma_id)
+            ->exists();
 
-    if ($sudahAda) return;
+        if ($sudahAda)
+            return;
 
-    try {
-        $companyCode   = $po->company?->company_code ?? 'XXX';
-        $year          = date('Y');
-        $month         = date('m');
-        $last          = \App\Models\Invoice::where('company_id', $po->company_id)
-            ->whereYear('invoice_date', $year)
-            ->whereMonth('invoice_date', $month)
-            ->orderByDesc('invoice_id')
-            ->lockForUpdate()
-            ->first();
-        $num           = $last ? ((int) substr($last->invoice_number, -5) + 1) : 1;
-        $invoiceNumber = "INV/{$companyCode}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
+        try {
+            $companyCode = $po->company?->company_code ?? 'XXX';
+            $year = date('Y');
+            $month = date('m');
+            $last = \App\Models\Invoice::where('company_id', $po->company_id)
+                ->whereYear('invoice_date', $year)
+                ->whereMonth('invoice_date', $month)
+                ->orderByDesc('invoice_id')
+                ->lockForUpdate()
+                ->first();
+            $num = $last ? ((int) substr($last->invoice_number, -5) + 1) : 1;
+            $invoiceNumber = "INV/{$companyCode}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
 
-        $invoice = \App\Models\Invoice::create([
-            'company_id'          => $po->company_id,
-            'customer_id'         => $po->customer_id,
-            'po_id'               => $po->po_id,
-            'proforma_invoice_id' => $pi->proforma_id,
-            'invoice_number'      => $invoiceNumber,
-            'invoice_date'        => now()->format('Y-m-d'),
-            'due_date'            => now()->addDays(30)->format('Y-m-d'),
-            'subtotal'            => $pi->subtotal,
-            'tax_percentage'      => $pi->tax_percentage,
-            'tax_amount'          => $pi->tax_amount,
-            'discount_amount'     => $pi->discount_amount,
-            'total_amount'        => $pi->total_amount,
-            'use_ppn'             => $usePpn,   // ✅ SIMPAN
-            'payment_status'      => 'unpaid',
-            'payment_terms'       => 'Full Payment',
-            'delivery_terms'      => 'FOB Destination',
-            'currency'            => 'IDR',
-            'notes'               => "Auto-generated dari PO {$po->po_number} (Full Payment)",
-            'created_by'          => Auth::id(),
-        ]);
-
-        foreach ($pi->items as $piItem) {
-            \App\Models\InvoiceItem::create([
-                'invoice_id'          => $invoice->invoice_id,
-                'product_id'          => $piItem->product_id,
-                'product_name'        => $piItem->product_name,
-                'product_description' => $piItem->product_description,
-                'quantity'            => $piItem->quantity,
-                'unit'                => $piItem->unit,
-                'unit_price'          => $piItem->unit_price,
-                'discount_percent'    => $piItem->discount_percent ?? 0,  // ✅ bawa diskon dari PI
-                'notes'               => $piItem->notes,
+            $invoice = \App\Models\Invoice::create([
+                'company_id' => $po->company_id,
+                'customer_id' => $po->customer_id,
+                'po_id' => $po->po_id,
+                'proforma_invoice_id' => $pi->proforma_id,
+                'invoice_number' => $invoiceNumber,
+                'invoice_date' => now()->format('Y-m-d'),
+                'due_date' => now()->addDays(30)->format('Y-m-d'),
+                'subtotal' => $pi->subtotal,
+                'tax_percentage' => $pi->tax_percentage,
+                'tax_amount' => $pi->tax_amount,
+                'discount_amount' => $pi->discount_amount,
+                'total_amount' => $pi->total_amount,
+                'use_ppn' => $usePpn,   // ✅ SIMPAN
+                'payment_status' => 'unpaid',
+                'payment_terms' => 'Full Payment',
+                'delivery_terms' => 'FOB Destination',
+                'currency' => 'IDR',
+                'notes' => "Auto-generated dari PO {$po->po_number} (Full Payment)",
+                'created_by' => Auth::id(),
             ]);
+
+            foreach ($pi->items as $piItem) {
+                \App\Models\InvoiceItem::create([
+                    'invoice_id' => $invoice->invoice_id,
+                    'product_id' => $piItem->product_id,
+                    'product_name' => $piItem->product_name,
+                    'product_description' => $piItem->product_description,
+                    'quantity' => $piItem->quantity,
+                    'unit' => $piItem->unit,
+                    'unit_price' => $piItem->unit_price,
+                    'discount_percent' => $piItem->discount_percent ?? 0,  // ✅ bawa diskon dari PI
+                    'notes' => $piItem->notes,
+                ]);
+            }
+
+            $pi->update([
+                'status' => 'converted',
+                'converted_to_invoice_id' => $invoice->invoice_id,
+                'converted_at' => now(),
+            ]);
+
+            \Illuminate\Support\Facades\Log::info(
+                "Auto-generated Invoice {$invoice->invoice_number} dari PO {$po->po_number} [use_ppn=" . ($usePpn ? 'true' : 'false') . "]"
+            );
+
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error("Gagal auto-generate Invoice untuk PO {$po->po_number}: " . $e->getMessage());
         }
-
-        $pi->update([
-            'status'                  => 'converted',
-            'converted_to_invoice_id' => $invoice->invoice_id,
-            'converted_at'            => now(),
-        ]);
-
-        \Illuminate\Support\Facades\Log::info(
-            "Auto-generated Invoice {$invoice->invoice_number} dari PO {$po->po_number} [use_ppn=" . ($usePpn ? 'true' : 'false') . "]"
-        );
-
-    } catch (\Exception $e) {
-        \Illuminate\Support\Facades\Log::error("Gagal auto-generate Invoice untuk PO {$po->po_number}: " . $e->getMessage());
     }
-}
 
     private function createTenderProject(PurchaseOrder $po): void
     {
-        if (TenderProjectDetail::where('po_id', $po->po_id)->exists()) return;
+        if (TenderProjectDetail::where('po_id', $po->po_id)->exists())
+            return;
 
         $contractEndDate = $po->valid_until
             ?? \Carbon\Carbon::parse($po->po_date)->addDays(30);
 
         TenderProjectDetail::create([
-            'po_id'               => $po->po_id,
-            'contract_number'     => $po->po_number,
+            'po_id' => $po->po_id,
+            'contract_number' => $po->po_number,
             'contract_start_date' => $po->po_date,
-            'contract_end_date'   => $contractEndDate,
-            'has_ba_uji_fungsi'   => false,
-            'ba_uji_fungsi_date'  => null,
-            'has_bahp'            => false,
-            'bahp_date'           => null,
-            'has_bast'            => false,
-            'bast_date'           => null,
-            'has_sp2d'            => false,
-            'sp2d_date'           => null,
-            'project_status'      => 'ongoing',
-            'notes'               => 'Auto-created from PO approval',
-            'created_by'          => Auth::id(),
+            'contract_end_date' => $contractEndDate,
+            'has_ba_uji_fungsi' => false,
+            'ba_uji_fungsi_date' => null,
+            'has_bahp' => false,
+            'bahp_date' => null,
+            'has_bast' => false,
+            'bast_date' => null,
+            'has_sp2d' => false,
+            'sp2d_date' => null,
+            'project_status' => 'ongoing',
+            'notes' => 'Auto-created from PO approval',
+            'created_by' => Auth::id(),
         ]);
     }
 
     private function createDeliveryNote(PurchaseOrder $po): void
     {
-        if (DeliveryNote::where('po_id', $po->po_id)->exists()) return;
+        if (DeliveryNote::where('po_id', $po->po_id)->exists())
+            return;
 
         $companyCode = $po->company?->company_code ?? 'XXX';
-        $year        = date('Y');
-        $sequence    = DeliveryNote::whereYear('created_at', $year)->count() + 1;
-        $dnNumber    = "DN/{$companyCode}/{$year}/" . str_pad($sequence, 4, '0', STR_PAD_LEFT);
+        $year = date('Y');
+        $sequence = DeliveryNote::whereYear('created_at', $year)->count() + 1;
+        $dnNumber = "DN/{$companyCode}/{$year}/" . str_pad($sequence, 4, '0', STR_PAD_LEFT);
 
         $deliveryNote = DeliveryNote::create([
-            'company_id'            => $po->company_id,
-            'po_id'                 => $po->po_id,
-            'delivery_note_number'  => $dnNumber,
-            'delivery_date'         => now(),
-            'recipient_name'        => $po->customer?->customer_name,
-            'recipient_address'     => $po->customer?->address,
-            'recipient_phone'       => $po->customer?->phone,
-            'delivery_status'       => 'pending',
-            'notes'                 => 'Auto-created from PO approval',
-            'created_by'            => Auth::id(),
+            'company_id' => $po->company_id,
+            'po_id' => $po->po_id,
+            'delivery_note_number' => $dnNumber,
+            'delivery_date' => now(),
+            'recipient_name' => $po->customer?->customer_name,
+            'recipient_address' => $po->customer?->address,
+            'recipient_phone' => $po->customer?->phone,
+            'delivery_status' => 'pending',
+            'notes' => 'Auto-created from PO approval',
+            'created_by' => Auth::id(),
         ]);
 
         foreach ($po->items as $poItem) {
             DeliveryNoteItem::create([
                 'delivery_note_id' => $deliveryNote->delivery_note_id,
-                'product_id'       => $poItem->product_id,
-                'product_name'     => $poItem->product_name,
-                'specification'    => $poItem->specification,
-                'quantity'         => $poItem->quantity,
-                'unit'             => $poItem->unit,
+                'product_id' => $poItem->product_id,
+                'product_name' => $poItem->product_name,
+                'specification' => $poItem->specification,
+                'quantity' => $poItem->quantity,
+                'unit' => $poItem->unit,
             ]);
         }
     }
@@ -1062,17 +1288,17 @@ private function autoGenerateInvoice(
 
         if (!empty($item['product_name'])) {
             $product = Product::create([
-                'product_code'  => !empty($item['product_code'])
+                'product_code' => !empty($item['product_code'])
                     ? $item['product_code']
                     : 'MNL-' . strtoupper(uniqid()),
-                'product_name'  => $item['product_name'],
-                'brand'         => $item['brand'] ?? '-',
-                'category'      => $item['category'] ?? null,
-                'unit'          => $item['unit'] ?? 'pcs',
+                'product_name' => $item['product_name'],
+                'brand' => $item['brand'] ?? '-',
+                'category' => $item['category'] ?? null,
+                'unit' => $item['unit'] ?? 'pcs',
                 'selling_price' => $item['unit_price'] ?? 0,
                 'purchase_price' => 0,
-                'supplier_id'   => null,
-                'is_precursor'  => false,
+                'supplier_id' => null,
+                'is_precursor' => false,
             ]);
             return $product->product_id;
         }

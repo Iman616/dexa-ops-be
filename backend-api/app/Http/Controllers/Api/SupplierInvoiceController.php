@@ -111,11 +111,13 @@ class SupplierInvoiceController extends Controller
 public function issueDraftInvoice(Request $request, $id)
 {
     $validator = Validator::make($request->all(), [
-        'invoice_number' => 'required|string|max:100|unique:supplierinvoices,invoice_number,' . $id . ',supplier_invoice_id',
-        'due_date' => 'nullable|date|after_or_equal:invoice_date',
-        'invoice_file' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120', // ✅ MANDATORY!
-        'notes' => 'nullable|string',
-    ]);
+    'invoice_number' => 'required|string|max:100|unique:supplierinvoices,invoice_number,' . $id . ',supplier_invoice_id',
+    'due_date'       => 'nullable|date|after_or_equal:invoice_date',
+    'invoice_file'   => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120',
+    'tax_invoice_file' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120', // ✅ TAMBAH opsional
+    'notes'          => 'nullable|string',
+]);
+
 
     if ($validator->fails()) {
         return response()->json([
@@ -250,6 +252,7 @@ public function deleteDraftInvoice($id)
             'supplier_id' => 'required|exists:suppliers,supplier_id',
             'supplier_po_id' => 'nullable|exists:supplier_purchase_orders,supplier_po_id',
 'invoice_number' => 'required|string|unique:supplierinvoices,invoice_number|max:100',
+'tax_invoice_file'  => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
             'due_date' => 'nullable|date|after_or_equal:invoice_date',
             'payment_terms' => 'nullable|in:cash,net7,net14,net30,net60,custom',
             'notes' => 'nullable|string',
@@ -274,12 +277,20 @@ public function deleteDraftInvoice($id)
         DB::beginTransaction();
         try {
             // Upload file jika ada
-            $invoiceFilePath = null;
-            if ($request->hasFile('invoice_file')) {
-                $file = $request->file('invoice_file');
-                $fileName = 'invoice_' . time() . '_' . $file->getClientOriginalName();
-                $invoiceFilePath = $file->storeAs('supplierinvoices', $fileName, 'public');
-            }
+           $invoiceFilePath = null;
+if ($request->hasFile('invoice_file')) {
+    $file = $request->file('invoice_file');
+    $fileName = 'invoice_' . time() . '_' . $file->getClientOriginalName();
+    $invoiceFilePath = $file->storeAs('supplier_invoices', $fileName, 'public');
+}
+
+// ✅ TAMBAH: Upload faktur pajak
+$taxInvoiceFilePath = null;
+if ($request->hasFile('tax_invoice_file')) {
+    $file = $request->file('tax_invoice_file');
+    $fileName = 'tax_' . time() . '_' . $file->getClientOriginalName();
+    $taxInvoiceFilePath = $file->storeAs('supplier_invoices/tax', $fileName, 'public');
+}
 
             // Hitung total
             $totalAmount = 0;
@@ -300,6 +311,7 @@ public function deleteDraftInvoice($id)
                 'paid_amount' => 0,
                 'payment_status' => 'unpaid',
                 'invoice_file_path' => $invoiceFilePath,
+                 'tax_invoice_file_path' => $taxInvoiceFilePath,
                 'notes' => $request->notes,
                 'created_by' => Auth::id(),
             ]);
@@ -347,6 +359,8 @@ public function deleteDraftInvoice($id)
             'supplier_id' => 'required|exists:suppliers,supplier_id',
             'supplier_po_id' => 'nullable|exists:supplier_purchase_orders,supplier_po_id',
 'invoice_number' => 'required|string|max:100|unique:supplierinvoices,invoice_number,' . $id . ',supplier_invoice_id',
+'tax_invoice_file' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120', // ✅ TAMBAH
+
             'due_date' => 'nullable|date|after_or_equal:invoice_date',
             'payment_terms' => 'nullable|in:cash,net7,net14,net30,net60,custom',
             'notes' => 'nullable|string',
@@ -381,15 +395,22 @@ public function deleteDraftInvoice($id)
             }
 
             // Upload file baru jika ada
-            $invoiceFilePath = $invoice->invoice_file_path;
-            if ($request->hasFile('invoice_file')) {
-                if ($invoiceFilePath) {
-                    Storage::disk('public')->delete($invoiceFilePath);
-                }
-                $file = $request->file('invoice_file');
-                $fileName = 'invoice_' . time() . '_' . $file->getClientOriginalName();
-                $invoiceFilePath = $file->storeAs('supplierinvoices', $fileName, 'public');
-            }
+         // Existing invoice file upload...
+$invoiceFilePath = $invoice->invoice_file_path;
+if ($request->hasFile('invoice_file')) {
+    if ($invoiceFilePath) Storage::disk('public')->delete($invoiceFilePath);
+    $file = $request->file('invoice_file');
+    $invoiceFilePath = $file->storeAs('supplier_invoices', 'invoice_' . time() . '_' . $file->getClientOriginalName(), 'public');
+}
+
+// ✅ TAMBAH: Upload/replace faktur pajak
+$taxInvoiceFilePath = $invoice->tax_invoice_file_path;
+if ($request->hasFile('tax_invoice_file')) {
+    if ($taxInvoiceFilePath) Storage::disk('public')->delete($taxInvoiceFilePath);
+    $file = $request->file('tax_invoice_file');
+    $taxInvoiceFilePath = $file->storeAs('supplier_invoices/tax', 'tax_' . time() . '_' . $file->getClientOriginalName(), 'public');
+}
+
 
             // Hitung total baru
             $totalAmount = 0;
@@ -408,6 +429,7 @@ public function deleteDraftInvoice($id)
                 'payment_terms' => $request->payment_terms,
                 'total_amount' => $totalAmount,
                 'invoice_file_path' => $invoiceFilePath,
+                   'tax_invoice_file_path' => $taxInvoiceFilePath,
                 'notes' => $request->notes,
             ]);
 
@@ -773,6 +795,33 @@ public function deleteDraftInvoice($id)
             ], 500);
         }
     }
+
+    /**
+ * Download tax invoice file (faktur pajak)
+ * GET /api/supplier-invoices/{id}/download-tax
+ */
+public function downloadTaxInvoiceFile($id)
+{
+    try {
+        $invoice = $this->supplierInvoiceService->getInvoice($id);
+
+        if (!$invoice->tax_invoice_file_path || !Storage::disk('public')->exists($invoice->tax_invoice_file_path)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'File faktur pajak tidak ditemukan'
+            ], 404);
+        }
+
+        return Storage::disk('public')->download($invoice->tax_invoice_file_path);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal download faktur pajak: ' . $e->getMessage()
+        ], 500);
+    }
+}
+
 
     /**
      * Download payment proof

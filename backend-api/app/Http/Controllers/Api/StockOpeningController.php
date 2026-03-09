@@ -15,44 +15,66 @@ class StockOpeningController extends Controller
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'product_id' => 'required|exists:products,product_id',
-            'batch_number' => 'required|string|max:100',
-            'quantity' => 'required|integer|min:0',
-            'value' => 'required|numeric',
-            'opening_date' => 'required|date',
+            'product_id'       => 'required|exists:products,product_id',
+            'batch_number'     => 'required|string|max:100',
+            'quantity'         => 'required|integer|min:0',
+            'value'            => 'required|numeric',
+            'opening_date'     => 'required|date',
             'manufacture_date' => 'nullable|date',
-            'expiry_date' => 'nullable|date',
+            'expiry_date'      => 'nullable|date',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
         try {
             DB::beginTransaction();
 
-            // Create or get batch
+            // ─── FIX: firstOrCreate harus include semua field NOT NULL ──────────
+            // stock_batches.quantity_initial  → NOT NULL, tidak ada default
+            // stock_batches.purchase_price    → NOT NULL, tidak ada default
+            // stock_batches.quantity_available → pakai nilai dari quantity
+            // Tanpa ini → SQLSTATE[HY000]: General error: 1364 Field doesn't have a default value
+            $purchasePrice = $request->quantity > 0
+                ? (float)$request->value / (int)$request->quantity
+                : 0;
+
             $batch = StockBatch::firstOrCreate(
                 [
+                    // ← Key untuk lookup: cari batch yang sudah ada
                     'batch_number' => $request->batch_number,
-                    'product_id' => $request->product_id,
+                    'product_id'   => $request->product_id,
                 ],
                 [
-                    'manufacture_date' => $request->manufacture_date ?: null,
-                    'expiry_date' => $request->expiry_date ?: null,
+                    // ← Nilai yang diisi HANYA jika baru dibuat
+                    'quantity_initial'    => $request->quantity,
+                    'quantity_available'  => $request->quantity,
+                    'purchase_price'      => $purchasePrice,
+                    'manufacture_date'    => $request->manufacture_date ?: null,
+                    'expiry_date'         => $request->expiry_date ?: null,
+                    'status'              => 'active',
                 ]
             );
 
-            // Create stock opening
+            // Jika batch sudah ada tapi expiry/manufacture berubah, update
+            if (!$batch->wasRecentlyCreated) {
+                $batch->update([
+                    'manufacture_date' => $request->manufacture_date ?: $batch->manufacture_date,
+                    'expiry_date'      => $request->expiry_date ?: $batch->expiry_date,
+                ]);
+            }
+
+            // Buat stock opening
             $stockOpening = StockOpening::create([
-                'product_id' => $request->product_id,
-                'batch_id' => $batch->batch_id,
-                'quantity' => $request->quantity,
-                'value' => $request->value,
+                'product_id'   => $request->product_id,
+                'batch_id'     => $batch->batch_id,
+                'quantity'     => $request->quantity,
+                'value'        => $request->value,
                 'opening_date' => $request->opening_date,
             ]);
 
@@ -67,12 +89,11 @@ class StockOpeningController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Stock opening created successfully',
-                'data' => $stockOpening
+                'data'    => $stockOpening
             ], 201);
 
         } catch (\Exception $e) {
             DB::rollBack();
-            
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to create stock opening: ' . $e->getMessage()
@@ -92,20 +113,20 @@ class StockOpeningController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
-            'product_id' => 'required|exists:products,product_id',
-            'batch_number' => 'required|string|max:100',
-            'quantity' => 'required|integer|min:0',
-            'value' => 'required|numeric',
-            'opening_date' => 'required|date',
+            'product_id'       => 'required|exists:products,product_id',
+            'batch_number'     => 'required|string|max:100',
+            'quantity'         => 'required|integer|min:0',
+            'value'            => 'required|numeric',
+            'opening_date'     => 'required|date',
             'manufacture_date' => 'nullable|date',
-            'expiry_date' => 'nullable|date',
+            'expiry_date'      => 'nullable|date',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
@@ -113,33 +134,37 @@ class StockOpeningController extends Controller
             DB::beginTransaction();
 
             $oldBatchId = $stockOpening->batch_id;
-            $oldDate = \Carbon\Carbon::parse($stockOpening->opening_date);
+            $oldDate    = \Carbon\Carbon::parse($stockOpening->opening_date);
 
-            // Update or create batch
+            $purchasePrice = $request->quantity > 0
+                ? (float)$request->value / (int)$request->quantity
+                : 0;
+
+            // ─── FIX: updateOrCreate juga harus include required fields ─────────
             $batch = StockBatch::updateOrCreate(
                 [
                     'batch_number' => $request->batch_number,
-                    'product_id' => $request->product_id,
+                    'product_id'   => $request->product_id,
                 ],
                 [
-                    'manufacture_date' => $request->manufacture_date ?: null,
-                    'expiry_date' => $request->expiry_date ?: null,
+                    'quantity_initial'    => $request->quantity,
+                    'quantity_available'  => $request->quantity,
+                    'purchase_price'      => $purchasePrice,
+                    'manufacture_date'    => $request->manufacture_date ?: null,
+                    'expiry_date'         => $request->expiry_date ?: null,
                 ]
             );
 
-            // Update stock opening
             $stockOpening->update([
-                'product_id' => $request->product_id,
-                'batch_id' => $batch->batch_id,
-                'quantity' => $request->quantity,
-                'value' => $request->value,
+                'product_id'   => $request->product_id,
+                'batch_id'     => $batch->batch_id,
+                'quantity'     => $request->quantity,
+                'value'        => $request->value,
                 'opening_date' => $request->opening_date,
             ]);
 
-            // Update ending stock for old period
             EndingStock::updateEndingStock($oldBatchId, $oldDate->year, $oldDate->month);
 
-            // Update ending stock for new period
             $newDate = \Carbon\Carbon::parse($request->opening_date);
             EndingStock::updateEndingStock($batch->batch_id, $newDate->year, $newDate->month);
 
@@ -150,12 +175,11 @@ class StockOpeningController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Stock opening updated successfully',
-                'data' => $stockOpening
-            ], 200);
+                'data'    => $stockOpening
+            ]);
 
         } catch (\Exception $e) {
             DB::rollBack();
-            
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update stock opening: ' . $e->getMessage()
@@ -178,11 +202,10 @@ class StockOpeningController extends Controller
             DB::beginTransaction();
 
             $batchId = $stockOpening->batch_id;
-            $date = \Carbon\Carbon::parse($stockOpening->opening_date);
+            $date    = \Carbon\Carbon::parse($stockOpening->opening_date);
 
             $stockOpening->delete();
 
-            // Update ending stock after deletion
             EndingStock::updateEndingStock($batchId, $date->year, $date->month);
 
             DB::commit();
@@ -194,7 +217,6 @@ class StockOpeningController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to delete stock opening: ' . $e->getMessage()
@@ -202,13 +224,12 @@ class StockOpeningController extends Controller
         }
     }
 
-    // Method lainnya tetap sama...
     public function index(Request $request)
     {
         try {
             $query = StockOpening::with(['product', 'batch']);
 
-            if ($request->has('search') && $request->search) {
+            if ($request->filled('search')) {
                 $search = $request->search;
                 $query->whereHas('product', function ($q) use ($search) {
                     $q->where('product_name', 'like', "%{$search}%")
@@ -216,26 +237,31 @@ class StockOpeningController extends Controller
                 });
             }
 
-            if ($request->has('product_id')) {
+            if ($request->filled('product_id')) {
                 $query->where('product_id', $request->product_id);
             }
 
-            if ($request->has('period_month') && $request->has('period_year')) {
+            // ─── FIX: Filter bulan/tahun hanya jika keduanya dikirim ────────────
+            // Jika frontend kirim period_month & period_year kosong (""),
+            // $request->filled() return false → tidak filter → tampil semua data
+            if ($request->filled('period_month') && $request->filled('period_year')) {
                 $query->whereYear('opening_date', $request->period_year)
                       ->whereMonth('opening_date', $request->period_month);
+            } elseif ($request->filled('period_year')) {
+                $query->whereYear('opening_date', $request->period_year);
             }
 
-            $sortBy = $request->get('sort_by', 'opening_date');
+            $sortBy    = $request->get('sort_by', 'opening_date');
             $sortOrder = $request->get('sort_order', 'desc');
             $query->orderBy($sortBy, $sortOrder);
 
-            $perPage = $request->get('per_page', 15);
+            $perPage      = $request->get('per_page', 15);
             $stockOpenings = $query->paginate($perPage);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Stock openings retrieved successfully',
-                'data' => $stockOpenings
+                'data'    => $stockOpenings
             ]);
 
         } catch (\Exception $e) {
@@ -261,7 +287,7 @@ class StockOpeningController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Stock opening retrieved successfully',
-                'data' => $stockOpening
+                'data'    => $stockOpening
             ]);
 
         } catch (\Exception $e) {

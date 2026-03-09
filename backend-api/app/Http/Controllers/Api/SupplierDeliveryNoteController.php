@@ -67,17 +67,17 @@ class SupplierDeliveryNoteController extends Controller
             $query->where('delivery_note_date', '<=', $request->end_date);
         }
 
-        $sortBy    = $request->get('sort_by', 'delivery_note_date');
+        $sortBy = $request->get('sort_by', 'delivery_note_date');
         $sortOrder = $request->get('sort_order', 'desc');
         $query->orderBy($sortBy, $sortOrder);
 
-        $perPage       = $request->get('per_page', 15);
+        $perPage = $request->get('per_page', 15);
         $deliveryNotes = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
             'message' => 'Supplier delivery notes retrieved successfully',
-            'data'    => $deliveryNotes,
+            'data' => $deliveryNotes,
         ], 200);
     }
 
@@ -87,28 +87,26 @@ class SupplierDeliveryNoteController extends Controller
      */
     public function store(Request $request)
     {
-        $validator = Validator::make($request->all(), [
-            'company_id'                         => 'required|exists:companies,company_id',
-            'supplier_id'                        => 'nullable|exists:suppliers,supplier_id',
-            'supplier_po_id'                     => 'nullable|exists:supplier_purchase_orders,supplier_po_id',
-            'delivery_note_number'               => 'required|string|max:100|unique:supplier_delivery_notes,delivery_note_number',
-            'delivery_note_date'                 => 'required|date',
-            'delivery_note_file'                 => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
-            'notes'                              => 'nullable|string',
-            'items'                              => 'required|array|min:1',
-            'items.*.product_id'                 => 'required|exists:products,product_id',
-            'items.*.batch_number'               => 'required|string|max:100',
-            'items.*.quantity'                   => 'required|integer|min:1',
-            'items.*.purchase_price'             => 'required|numeric|min:0',
-            'items.*.manufacture_date'           => 'nullable|date',
-            'items.*.expiry_date'                => 'nullable|date|after_or_equal:items.*.manufacture_date',
-        ]);
+        $baseRules = [
+            'company_id' => 'required|exists:companies,company_id',
+            'supplier_id' => 'nullable|exists:suppliers,supplier_id',
+            'supplier_po_id' => 'nullable|exists:supplier_purchase_orders,supplier_po_id',
+            'delivery_note_number' => 'required|string|max:100|unique:supplier_delivery_notes,delivery_note_number',
+            'delivery_note_date' => 'required|date',
+            'delivery_note_file' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
+            'notes' => 'nullable|string',
+        ];
+
+        // ✅ Rule item dinamis berdasarkan product_type
+        $itemRules = $this->buildItemRules($request->input('items', []));
+
+        $validator = Validator::make($request->all(), array_merge($baseRules, $itemRules));
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors'  => $validator->errors(),
+                'errors' => $validator->errors(),
             ], 422);
         }
 
@@ -116,14 +114,14 @@ class SupplierDeliveryNoteController extends Controller
             DB::beginTransaction();
 
             $deliveryNote = SupplierDeliveryNote::create([
-                'company_id'           => $request->company_id,
-                'supplier_id'          => $request->supplier_id,
-                'supplier_po_id'       => $request->supplier_po_id,
+                'company_id' => $request->company_id,
+                'supplier_id' => $request->supplier_id,
+                'supplier_po_id' => $request->supplier_po_id,
                 'delivery_note_number' => $request->delivery_note_number,
-                'delivery_note_date'   => $request->delivery_note_date,
-                'status'               => 'pending',
-                'notes'                => $request->notes,
-                'created_by'           => Auth::id(),
+                'delivery_note_date' => $request->delivery_note_date,
+                'status' => 'pending',
+                'notes' => $request->notes,
+                'created_by' => Auth::id(),
             ]);
 
             if ($request->hasFile('delivery_note_file')) {
@@ -133,13 +131,13 @@ class SupplierDeliveryNoteController extends Controller
             foreach ($request->items as $item) {
                 SupplierDeliveryNoteItem::create([
                     'supplier_delivery_note_id' => $deliveryNote->supplier_delivery_note_id,
-                    'product_id'                => $item['product_id'],
-                    'batch_number'              => $item['batch_number'],
-                    'quantity'                  => $item['quantity'],
-                    'purchase_price'            => $item['purchase_price'],
-                    'manufacture_date'          => $item['manufacture_date'] ?? null,
-                    'expiry_date'               => $item['expiry_date'] ?? null,
-                    'notes'                     => $item['notes'] ?? null,
+                    'product_id' => $item['product_id'],
+                    'batch_number' => $item['batch_number'],
+                    'quantity' => $item['quantity'],
+                    'purchase_price' => $item['purchase_price'],
+                    'manufacture_date' => $item['manufacture_date'] ?? null,
+                    'expiry_date' => $item['expiry_date'] ?? null,
+                    'notes' => $item['notes'] ?? null,
                 ]);
             }
 
@@ -150,7 +148,7 @@ class SupplierDeliveryNoteController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Supplier delivery note created successfully',
-                'data'    => $deliveryNote,
+                'data' => $deliveryNote,
             ], 201);
 
         } catch (\Exception $e) {
@@ -158,7 +156,7 @@ class SupplierDeliveryNoteController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to create supplier delivery note',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -189,7 +187,7 @@ class SupplierDeliveryNoteController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Supplier delivery note retrieved successfully',
-            'data'    => $deliveryNote,
+            'data' => $deliveryNote,
         ], 200);
     }
 
@@ -215,27 +213,32 @@ class SupplierDeliveryNoteController extends Controller
             ], 400);
         }
 
-        $validator = Validator::make($request->all(), [
-            'supplier_id'                        => 'nullable|exists:suppliers,supplier_id',
-            'supplier_po_id'                     => 'nullable|exists:supplier_purchase_orders,supplier_po_id',
-            'delivery_note_number'               => 'sometimes|required|string|max:100|unique:supplier_delivery_notes,delivery_note_number,' . $id . ',supplier_delivery_note_id',
-            'delivery_note_date'                 => 'sometimes|required|date',
-            'delivery_note_file'                 => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
-            'notes'                              => 'nullable|string',
-            'items'                              => 'sometimes|required|array|min:1',
-            'items.*.product_id'                 => 'required|exists:products,product_id',
-            'items.*.batch_number'               => 'required|string|max:100',
-            'items.*.quantity'                   => 'required|integer|min:1',
-            'items.*.purchase_price'             => 'required|numeric|min:0',
-            'items.*.manufacture_date'           => 'nullable|date',
-            'items.*.expiry_date'                => 'nullable|date|after_or_equal:items.*.manufacture_date',
-        ]);
+        $baseRules = [
+            'supplier_id' => 'nullable|exists:suppliers,supplier_id',
+            'supplier_po_id' => 'nullable|exists:supplier_purchase_orders,supplier_po_id',
+            'delivery_note_number' => 'sometimes|required|string|max:100|unique:supplier_delivery_notes,delivery_note_number,' . $id . ',supplier_delivery_note_id',
+            'delivery_note_date' => 'sometimes|required|date',
+            'delivery_note_file' => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
+            'notes' => 'nullable|string',
+            'items' => 'sometimes|required|array|min:1',
+        ];
+
+        // ✅ Rule item dinamis berdasarkan product_type (hanya jika items dikirim)
+        $itemRules = $request->has('items')
+            ? $this->buildItemRules($request->input('items', []))
+            : [];
+
+        // Hapus key 'items' dari $itemRules untuk update (sudah di $baseRules)
+        unset($itemRules['items']);
+
+        $validator = Validator::make($request->all(), array_merge($baseRules, $itemRules));
+
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors'  => $validator->errors(),
+                'errors' => $validator->errors(),
             ], 422);
         }
 
@@ -254,13 +257,13 @@ class SupplierDeliveryNoteController extends Controller
                 foreach ($request->items as $item) {
                     SupplierDeliveryNoteItem::create([
                         'supplier_delivery_note_id' => $deliveryNote->supplier_delivery_note_id,
-                        'product_id'                => $item['product_id'],
-                        'batch_number'              => $item['batch_number'],
-                        'quantity'                  => $item['quantity'],
-                        'purchase_price'            => $item['purchase_price'],
-                        'manufacture_date'          => $item['manufacture_date'] ?? null,
-                        'expiry_date'               => $item['expiry_date'] ?? null,
-                        'notes'                     => $item['notes'] ?? null,
+                        'product_id' => $item['product_id'],
+                        'batch_number' => $item['batch_number'],
+                        'quantity' => $item['quantity'],
+                        'purchase_price' => $item['purchase_price'],
+                        'manufacture_date' => $item['manufacture_date'] ?? null,
+                        'expiry_date' => $item['expiry_date'] ?? null,
+                        'notes' => $item['notes'] ?? null,
                     ]);
                 }
             }
@@ -272,7 +275,7 @@ class SupplierDeliveryNoteController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Supplier delivery note updated successfully',
-                'data'    => $deliveryNote,
+                'data' => $deliveryNote,
             ], 200);
 
         } catch (\Exception $e) {
@@ -280,7 +283,7 @@ class SupplierDeliveryNoteController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update supplier delivery note',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -322,7 +325,7 @@ class SupplierDeliveryNoteController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to delete supplier delivery note',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -331,14 +334,14 @@ class SupplierDeliveryNoteController extends Controller
      * Receive goods from delivery note → Create Stock In + Auto-upsert ProductSupplier
      * POST /api/supplier-delivery-notes/{id}/receive
      */
-public function receiveGoods(Request $request, $id)
+    public function receiveGoods(Request $request, $id)
     {
         $validator = Validator::make($request->all(), [
-            'receiver_name'             => 'required|string|max:100',
-            'receiver_position'         => 'nullable|string|max:100',
-            'received_datetime'         => 'nullable|date',
+            'receiver_name' => 'required|string|max:100',
+            'receiver_position' => 'nullable|string|max:100',
+            'received_datetime' => 'nullable|date',
             'auto_create_draft_invoice' => 'nullable|boolean',
-            'payment_terms'             => 'nullable|in:net7,net14,net30,net60',
+            'payment_terms' => 'nullable|in:net7,net14,net30,net60',
             'nullable|image|mimes:png,jpg,jpeg,svg|max:2048',
         ]);
 
@@ -366,41 +369,45 @@ public function receiveGoods(Request $request, $id)
             foreach ($deliveryNote->items as $item) {
 
                 // 1. Batch
+                $batchNumber = !empty($item->batch_number)
+                    ? $item->batch_number
+                    : 'GLASS-' . $item->product_id . '-' . now()->format('Ymd');  // ✅ fallback glassware
+
                 $batch = StockBatch::firstOrCreate(
                     [
-                        'company_id'   => $deliveryNote->company_id,
-                        'product_id'   => $item->product_id,
-                        'batch_number' => $item->batch_number,
+                        'company_id' => $deliveryNote->company_id,
+                        'product_id' => $item->product_id,
+                        'batch_number' => $batchNumber,  // ✅ pakai variable ini
                     ],
                     [
-                        'supplier_id'                    => $deliveryNote->supplier_id,
+                        'supplier_id' => $deliveryNote->supplier_id,
                         'supplier_delivery_note_item_id' => $item->item_id,
-                        'manufacture_date'               => $item->manufacture_date,
-                        'expiry_date'                    => $item->expiry_date,
-                        'purchase_price'                 => $item->purchase_price,
-                        'quantity_initial'               => 0,
-                        'quantity_available'             => 0,
-                        'status'                         => 'active',
-                        'received_date'                  => $receivedDatetime,
+                        'manufacture_date' => $item->manufacture_date,
+                        'expiry_date' => $item->expiry_date,   // null → ok untuk glassware
+                        'purchase_price' => $item->purchase_price,
+                        'quantity_initial' => 0,
+                        'quantity_available' => 0,
+                        'status' => 'active',
+                        'received_date' => $receivedDatetime,
                     ]
                 );
 
                 // 2. StockIn
                 $stockIn = StockIn::create([
-                    'company_id'                     => $deliveryNote->company_id,
-                    'product_id'                     => $item->product_id,
-                    'batch_id'                       => $batch->batch_id,
-                    'supplier_delivery_note_id'      => $deliveryNote->supplier_delivery_note_id,
+                    'company_id' => $deliveryNote->company_id,
+                    'product_id' => $item->product_id,
+                    'batch_id' => $batch->batch_id,
+                    'supplier_delivery_note_id' => $deliveryNote->supplier_delivery_note_id,
                     'supplier_delivery_note_item_id' => $item->item_id,
-                    'delivery_note_number'           => $deliveryNote->delivery_note_number,
-                    'delivery_note_date'             => $deliveryNote->delivery_note_date,
-                    'delivery_note_file'             => $deliveryNote->delivery_note_file,
-                    'quantity'                       => $item->quantity,
-                    'purchase_price'                 => $item->purchase_price,
-                    'received_datetime'              => $receivedDatetime,
-                    'receiver_name'                  => $request->receiver_name,
-                    'receiver_position'              => $request->receiver_position,
-                    'created_by'                     => Auth::id(),
+                    'delivery_note_number' => $deliveryNote->delivery_note_number,
+                    'delivery_note_date' => $deliveryNote->delivery_note_date,
+                    'delivery_note_file' => $deliveryNote->delivery_note_file,
+                    'quantity' => $item->quantity,
+                    'purchase_price' => $item->purchase_price,
+                    'received_datetime' => $receivedDatetime,
+                    'receiver_name' => $request->receiver_name,
+                    'receiver_position' => $request->receiver_position,
+                    'created_by' => Auth::id(),
                 ]);
 
                 // 3. Update qty batch
@@ -409,20 +416,20 @@ public function receiveGoods(Request $request, $id)
                     $batch->update(['quantity_initial' => $batch->quantity_available]);
                 }
 
-        // Di receiveGoods(), bagian stock movement
-StockMovement::create([
-    'product_id'     => $item->product_id,
-    'batch_id'       => $batch->batch_id,
-    'movement_type'  => 'in',
-    'quantity'       => $item->quantity,
-    'unit_cost'      => $item->purchase_price,
-    'reference_id'   => $deliveryNote->supplier_delivery_note_id,
-    'reference_type' => 'supplier_delivery_note',
-    'notes'          => 'Stock in from ' . $deliveryNote->delivery_note_number,
-    'created_by'     => Auth::id(),
-    'created_at'     => now(), // ✅ tambah
-    'updated_at'     => now(), // ✅ tambah
-]);
+                // Di receiveGoods(), bagian stock movement
+                StockMovement::create([
+                    'product_id' => $item->product_id,
+                    'batch_id' => $batch->batch_id,
+                    'movement_type' => 'in',
+                    'quantity' => $item->quantity,
+                    'unit_cost' => $item->purchase_price,
+                    'reference_id' => $deliveryNote->supplier_delivery_note_id,
+                    'reference_type' => 'supplier_delivery_note',
+                    'notes' => 'Stock in from ' . $deliveryNote->delivery_note_number,
+                    'created_by' => Auth::id(),
+                    'created_at' => now(), // ✅ tambah
+                    'updated_at' => now(), // ✅ tambah
+                ]);
 
 
                 // 5. Link stock_in_id ke DN item
@@ -432,14 +439,14 @@ StockMovement::create([
                 if ($deliveryNote->supplier_id) {
                     ProductSupplier::updateOrCreate(
                         [
-                            'product_id'  => $item->product_id,
+                            'product_id' => $item->product_id,
                             'supplier_id' => $deliveryNote->supplier_id,
-                            'company_id'  => $deliveryNote->company_id,
+                            'company_id' => $deliveryNote->company_id,
                         ],
                         [
                             'purchase_price' => $item->purchase_price,
-                            'is_primary'     => false,
-                            'is_active'      => true,
+                            'is_primary' => false,
+                            'is_active' => true,
                         ]
                     );
                 }
@@ -449,12 +456,12 @@ StockMovement::create([
 
             // Update DN status
             $deliveryNote->update([
-    'status'             => 'received',
-    'received_datetime'  => $receivedDatetime,
-    'receiver_name'      => $request->receiver_name,
-    'receiver_position'  => $request->receiver_position,
-    'received_by'        => Auth::id(),
-]);
+                'status' => 'received',
+                'received_datetime' => $receivedDatetime,
+                'receiver_name' => $request->receiver_name,
+                'receiver_position' => $request->receiver_position,
+                'received_by' => Auth::id(),
+            ]);
 
             // Update Supplier PO status
             if ($deliveryNote->supplier_po_id) {
@@ -462,10 +469,10 @@ StockMovement::create([
             }
 
             $signaturePath = null;
-if ($request->hasFile('receiver_signature')) {
-    $signaturePath = $request->file('receiver_signature')
-        ->store('signatures/delivery-notes', 'public');
-}
+            if ($request->hasFile('receiver_signature')) {
+                $signaturePath = $request->file('receiver_signature')
+                    ->store('signatures/delivery-notes', 'public');
+            }
 
             // Auto-create draft invoice
             $draftInvoice = null;
@@ -483,10 +490,10 @@ if ($request->hasFile('receiver_signature')) {
             return response()->json([
                 'success' => true,
                 'message' => 'Barang berhasil diterima' . ($draftInvoice ? ' dan draft invoice dibuat' : ''),
-                'data'    => [
-                    'delivery_note'    => $deliveryNote,
+                'data' => [
+                    'delivery_note' => $deliveryNote,
                     'stock_in_records' => $stockInRecords,
-                    'draft_invoice'    => $draftInvoice,
+                    'draft_invoice' => $draftInvoice,
                 ],
             ]);
 
@@ -499,112 +506,112 @@ if ($request->hasFile('receiver_signature')) {
     }
 
     /**
- * Auto-create draft Delivery Note dari PO yang status 'completed'
- * POST /api/supplier-purchase-orders/{id}/create-delivery-note
- */
-public function createDraftDeliveryNote(Request $request, $supplierPoId)
-{
-    $po = SupplierPurchaseOrder::with([
-        'company',
-        'supplier',
-        'items.product',
-        'items.receivedStockIns'
-    ])->findOrFail($supplierPoId);
+     * Auto-create draft Delivery Note dari PO yang status 'completed'
+     * POST /api/supplier-purchase-orders/{id}/create-delivery-note
+     */
+    public function createDraftDeliveryNote(Request $request, $supplierPoId)
+    {
+        $po = SupplierPurchaseOrder::with([
+            'company',
+            'supplier',
+            'items.product',
+            'items.receivedStockIns'
+        ])->findOrFail($supplierPoId);
 
-    // Validasi: PO harus completed dan belum ada full delivery
-    if ($po->status !== 'completed') {
-        return response()->json([
-            'success' => false,
-            'message' => 'PO harus status "completed" untuk buat delivery note'
-        ], 422);
-    }
-
-    // Hitung total yang sudah diterima
-    $totalOrdered  = $po->items->sum('quantity');
-    $totalReceived = $po->items->sum('received_quantity');
-
-    if ($totalReceived >= $totalOrdered) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Semua item sudah diterima, tidak perlu delivery note baru'
-        ], 422);
-    }
-
-    try {
-        DB::beginTransaction();
-
-        // Generate nomor DN draft
-        $draftNumber = 'DRAFT-DN-' . $po->po_number;
-
-        // Buat draft DN
-        $deliveryNote = SupplierDeliveryNote::create([
-            'company_id'             => $po->company_id,
-            'supplier_id'            => $po->supplier_id,
-            'supplier_po_id'         => $po->supplier_po_id,
-            'delivery_note_number'   => $draftNumber,
-            'delivery_note_date'     => now(),
-            'status'                 => 'draft',  // ✅ DRAFT
-            'notes'                  => "Auto-generated draft dari PO {$po->po_number}",
-            'created_by'             => Auth::id(),
-        ]);
-
-        // Copy item yang belum diterima (balance)
-        foreach ($po->items as $poItem) {
-            $remainingQty = $poItem->quantity - $poItem->received_quantity;
-
-            if ($remainingQty > 0) {
-                SupplierDeliveryNoteItem::create([
-                    'supplier_delivery_note_id' => $deliveryNote->supplier_delivery_note_id,
-                    'product_id'                => $poItem->product_id,
-                    'batch_number'              => 'AUTO-' . time() . '-' . $poItem->product_id, // draft batch
-                    'quantity'                  => $remainingQty,
-                    'purchase_price'            => $poItem->unit_price,
-                    'notes'                     => "Balance dari PO {$po->po_number}",
-                ]);
-            }
+        // Validasi: PO harus completed dan belum ada full delivery
+        if ($po->status !== 'completed') {
+            return response()->json([
+                'success' => false,
+                'message' => 'PO harus status "completed" untuk buat delivery note'
+            ], 422);
         }
 
-        DB::commit();
+        // Hitung total yang sudah diterima
+        $totalOrdered = $po->items->sum('quantity');
+        $totalReceived = $po->items->sum('received_quantity');
 
-        $deliveryNote->load(['company', 'supplier', 'items.product']);
+        if ($totalReceived >= $totalOrdered) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Semua item sudah diterima, tidak perlu delivery note baru'
+            ], 422);
+        }
 
-        return response()->json([
-            'success' => true,
-            'message' => "Draft Delivery Note dibuat: {$draftNumber}",
-            'data'    => $deliveryNote,
-        ], 201);
+        try {
+            DB::beginTransaction();
 
-    } catch (\Exception $e) {
-        DB::rollBack();
-        return response()->json([
-            'success' => false,
-            'message' => 'Gagal buat draft delivery note',
-            'error'   => $e->getMessage(),
-        ], 500);
+            // Generate nomor DN draft
+            $draftNumber = 'DRAFT-DN-' . $po->po_number;
+
+            // Buat draft DN
+            $deliveryNote = SupplierDeliveryNote::create([
+                'company_id' => $po->company_id,
+                'supplier_id' => $po->supplier_id,
+                'supplier_po_id' => $po->supplier_po_id,
+                'delivery_note_number' => $draftNumber,
+                'delivery_note_date' => now(),
+                'status' => 'draft',  // ✅ DRAFT
+                'notes' => "Auto-generated draft dari PO {$po->po_number}",
+                'created_by' => Auth::id(),
+            ]);
+
+            // Copy item yang belum diterima (balance)
+            foreach ($po->items as $poItem) {
+                $remainingQty = $poItem->quantity - $poItem->received_quantity;
+
+                if ($remainingQty > 0) {
+                    SupplierDeliveryNoteItem::create([
+                        'supplier_delivery_note_id' => $deliveryNote->supplier_delivery_note_id,
+                        'product_id' => $poItem->product_id,
+                        'batch_number' => 'AUTO-' . time() . '-' . $poItem->product_id, // draft batch
+                        'quantity' => $remainingQty,
+                        'purchase_price' => $poItem->unit_price,
+                        'notes' => "Balance dari PO {$po->po_number}",
+                    ]);
+                }
+            }
+
+            DB::commit();
+
+            $deliveryNote->load(['company', 'supplier', 'items.product']);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Draft Delivery Note dibuat: {$draftNumber}",
+                'data' => $deliveryNote,
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal buat draft delivery note',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
     }
-}
 
 
-     private function sendGoodsReceivedNotifications(
+    private function sendGoodsReceivedNotifications(
         SupplierDeliveryNote $deliveryNote,
         array $stockInRecords
     ): void {
         try {
             $supplierName = $deliveryNote->supplier?->supplier_name ?? 'Supplier';
-            $dnNumber     = $deliveryNote->delivery_note_number;
-            $companyId    = $deliveryNote->company_id;
-            $dnId         = $deliveryNote->supplier_delivery_note_id;
-            $totalItems   = count($deliveryNote->items);
-            $totalQty     = $deliveryNote->items->sum('quantity');
+            $dnNumber = $deliveryNote->delivery_note_number;
+            $companyId = $deliveryNote->company_id;
+            $dnId = $deliveryNote->supplier_delivery_note_id;
+            $totalItems = count($deliveryNote->items);
+            $totalQty = $deliveryNote->items->sum('quantity');
 
             // ── Bangun daftar produk yang masuk (untuk isi pesan) ──
-           $productList = $deliveryNote->items
-    ->map(function ($item) {
-        $name = $item->product?->product_name ?? '-';
-        $unit = $item->product?->unit ?? 'pcs';
-        return "{$name} ({$item->quantity} {$unit})";
-    })
-    ->join(', ');
+            $productList = $deliveryNote->items
+                ->map(function ($item) {
+                    $name = $item->product?->product_name ?? '-';
+                    $unit = $item->product?->unit ?? 'pcs';
+                    return "{$name} ({$item->quantity} {$unit})";
+                })
+                ->join(', ');
 
 
             // ── Kumpulkan semua user_id penerima (dedup di akhir) ──
@@ -619,22 +626,22 @@ public function createDraftDeliveryNote(Request $request, $supplierPoId)
                 $customerPoNumber = $this->resolveCustomerPoNumber($deliveryNote);
 
                 NotificationService::send(
-                    userId:        $customerPoCreatedBy,
-                    type:          'goods_received_from_po',
-                    title:         '📦 Barang Pesanan Sudah Masuk Gudang',
-                    message:       "Barang dari Supplier PO terkait PO Customer {$customerPoNumber} telah diterima. " .
-                                   "DN Supplier: {$dnNumber} dari {$supplierName}. " .
-                                   "Produk: {$productList}.",
+                    userId: $customerPoCreatedBy,
+                    type: 'goods_received_from_po',
+                    title: '📦 Barang Pesanan Sudah Masuk Gudang',
+                    message: "Barang dari Supplier PO terkait PO Customer {$customerPoNumber} telah diterima. " .
+                    "DN Supplier: {$dnNumber} dari {$supplierName}. " .
+                    "Produk: {$productList}.",
                     referenceType: 'supplier_delivery_note',
-                    referenceId:   $dnId,
+                    referenceId: $dnId,
                     meta: [
-                        'supplier_name'           => $supplierName,
-                        'delivery_note_number'    => $dnNumber,
-                        'customer_po_number'      => $customerPoNumber,
-                        'total_items'             => $totalItems,
-                        'total_quantity'          => $totalQty,
-                        'received_datetime'       => $deliveryNote->received_datetime?->toIso8601String(),
-                        'receiver_name'           => $deliveryNote->receiver_name,
+                        'supplier_name' => $supplierName,
+                        'delivery_note_number' => $dnNumber,
+                        'customer_po_number' => $customerPoNumber,
+                        'total_items' => $totalItems,
+                        'total_quantity' => $totalQty,
+                        'received_datetime' => $deliveryNote->received_datetime?->toIso8601String(),
+                        'receiver_name' => $deliveryNote->receiver_name,
                     ]
                 );
             }
@@ -650,32 +657,32 @@ public function createDraftDeliveryNote(Request $request, $supplierPoId)
 
             if (!empty($companyUserIds)) {
                 NotificationService::sendToMany(
-                    userIds:       $companyUserIds,
-                    type:          'goods_received',
-                    title:         '📦 Barang Masuk — ' . $dnNumber,
-                    message:       "Barang dari {$supplierName} telah diterima via {$dnNumber}. " .
-                                   "{$totalItems} jenis produk, total {$totalQty} unit. " .
-                                   "Penerima: {$deliveryNote->receiver_name}.",
+                    userIds: $companyUserIds,
+                    type: 'goods_received',
+                    title: '📦 Barang Masuk — ' . $dnNumber,
+                    message: "Barang dari {$supplierName} telah diterima via {$dnNumber}. " .
+                    "{$totalItems} jenis produk, total {$totalQty} unit. " .
+                    "Penerima: {$deliveryNote->receiver_name}.",
                     referenceType: 'supplier_delivery_note',
-                    referenceId:   $dnId,
+                    referenceId: $dnId,
                     meta: [
-                        'supplier_name'        => $supplierName,
+                        'supplier_name' => $supplierName,
                         'delivery_note_number' => $dnNumber,
-                        'total_items'          => $totalItems,
-                        'total_quantity'       => $totalQty,
-                        'received_datetime'    => $deliveryNote->received_datetime?->toIso8601String(),
-                        'receiver_name'        => $deliveryNote->receiver_name,
-                        'products'             => $deliveryNote->items->map(fn($i) => [
+                        'total_items' => $totalItems,
+                        'total_quantity' => $totalQty,
+                        'received_datetime' => $deliveryNote->received_datetime?->toIso8601String(),
+                        'receiver_name' => $deliveryNote->receiver_name,
+                        'products' => $deliveryNote->items->map(fn($i) => [
                             'product_name' => $i->product?->product_name,
-                            'quantity'     => $i->quantity,
-                            'unit'         => $i->product?->unit ?? 'pcs',
+                            'quantity' => $i->quantity,
+                            'unit' => $i->product?->unit ?? 'pcs',
                         ])->toArray(),
                     ]
                 );
             }
 
             Log::info("[GoodsReceived] Notifikasi dikirim. DN: {$dnNumber}, penerima: " .
-                      (count($recipientIds) + count($companyUserIds)) . " user.");
+                (count($recipientIds) + count($companyUserIds)) . " user.");
 
         } catch (\Exception $e) {
             // Jangan throw — notifikasi gagal tidak boleh batalkan penerimaan barang
@@ -685,12 +692,14 @@ public function createDraftDeliveryNote(Request $request, $supplierPoId)
 
     private function resolveCustomerPoCreatedBy(SupplierDeliveryNote $deliveryNote): ?int
     {
-        if (!$deliveryNote->supplier_po_id) return null;
+        if (!$deliveryNote->supplier_po_id)
+            return null;
 
         $supplierPo = \App\Models\SupplierPurchaseOrder::select('po_id')
             ->find($deliveryNote->supplier_po_id);
 
-        if (!$supplierPo?->po_id) return null;
+        if (!$supplierPo?->po_id)
+            return null;
 
         $customerPo = \App\Models\PurchaseOrder::select('created_by')
             ->find($supplierPo->po_id);
@@ -703,12 +712,14 @@ public function createDraftDeliveryNote(Request $request, $supplierPoId)
      */
     private function resolveCustomerPoNumber(SupplierDeliveryNote $deliveryNote): string
     {
-        if (!$deliveryNote->supplier_po_id) return '-';
+        if (!$deliveryNote->supplier_po_id)
+            return '-';
 
         $supplierPo = \App\Models\SupplierPurchaseOrder::select('po_id')
             ->find($deliveryNote->supplier_po_id);
 
-        if (!$supplierPo?->po_id) return '-';
+        if (!$supplierPo?->po_id)
+            return '-';
 
         $customerPo = \App\Models\PurchaseOrder::select('po_number')
             ->find($supplierPo->po_id);
@@ -724,10 +735,10 @@ public function createDraftDeliveryNote(Request $request, $supplierPoId)
     {
         $totalAmount = $deliveryNote->items->sum(fn($item) => $item->quantity * $item->purchase_price);
 
-        $draftNumber  = 'DRAFT-' . $deliveryNote->delivery_note_number;
+        $draftNumber = 'DRAFT-' . $deliveryNote->delivery_note_number;
         $paymentTerms = $request->payment_terms ?? 'net30';
-        $daysToAdd    = match ($paymentTerms) {
-            'net7'  => 7,
+        $daysToAdd = match ($paymentTerms) {
+            'net7' => 7,
             'net14' => 14,
             'net30' => 30,
             'net60' => 60,
@@ -735,32 +746,32 @@ public function createDraftDeliveryNote(Request $request, $supplierPoId)
         };
 
         $invoice = SupplierInvoice::create([
-            'supplier_id'               => $deliveryNote->supplier_id,
-            'supplier_po_id'            => $deliveryNote->supplier_po_id,
+            'supplier_id' => $deliveryNote->supplier_id,
+            'supplier_po_id' => $deliveryNote->supplier_po_id,
             'supplier_delivery_note_id' => $deliveryNote->supplier_delivery_note_id,
-            'invoice_number'            => $draftNumber,
-            'invoice_date'              => now(),
-            'due_date'                  => now()->addDays($daysToAdd),
-            'payment_terms'             => $paymentTerms,
-            'total_amount'              => $totalAmount,
-            'paid_amount'               => 0,
-            'payment_status'            => 'unpaid',
-            'invoice_status'            => 'draft',
-            'notes'                     => 'Auto-generated draft from ' . $deliveryNote->delivery_note_number,
-            'created_by'                => Auth::id(),
-            'created_at'                => now(),
-            'updated_at'                => now(),
+            'invoice_number' => $draftNumber,
+            'invoice_date' => now(),
+            'due_date' => now()->addDays($daysToAdd),
+            'payment_terms' => $paymentTerms,
+            'total_amount' => $totalAmount,
+            'paid_amount' => 0,
+            'payment_status' => 'unpaid',
+            'invoice_status' => 'draft',
+            'notes' => 'Auto-generated draft from ' . $deliveryNote->delivery_note_number,
+            'created_by' => Auth::id(),
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
 
         foreach ($deliveryNote->items as $dnItem) {
             SupplierInvoiceItem::create([
                 'supplier_invoice_id' => $invoice->supplier_invoice_id,
-                'product_id'          => $dnItem->product_id,
-                'product_name'        => $dnItem->product->product_name,
-                'quantity'            => $dnItem->quantity,
-                'unit'                => $dnItem->product->unit,
-                'unit_price'          => $dnItem->purchase_price,
-                'created_at'          => now(),
+                'product_id' => $dnItem->product_id,
+                'product_name' => $dnItem->product->product_name,
+                'quantity' => $dnItem->quantity,
+                'unit' => $dnItem->product->unit,
+                'unit_price' => $dnItem->purchase_price,
+                'created_at' => now(),
             ]);
         }
 
@@ -795,6 +806,67 @@ public function createDraftDeliveryNote(Request $request, $supplierPoId)
     }
 
     /**
+     * Build item validation rules berdasarkan product_type.
+     * Glassware → expiry_date tidak wajib, batch_number tidak wajib.
+     * Chemical/alatlab → expiry_date & batch_number tetap wajib.
+     */
+    private function buildItemRules(array $items): array
+    {
+        $rules = [
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'required|exists:products,product_id',
+            'items.*.quantity' => 'required|integer|min:1',
+            'items.*.purchase_price' => 'required|numeric|min:0',
+            'items.*.manufacture_date' => 'nullable|date',
+            'items.*.expiry_date' => 'nullable|date',
+            'items.*.notes' => 'nullable|string',
+        ];
+
+        if (empty($items)) {
+            // Fallback: wajib semua jika item belum ada
+            $rules['items.*.batch_number'] = 'required|string|max:100';
+            $rules['items.*.expiry_date'] = 'nullable|date';
+            return $rules;
+        }
+
+        // Ambil product_type untuk setiap item sekali query (efisien)
+        $productIds = collect($items)
+            ->pluck('product_id')
+            ->filter()
+            ->unique()
+            ->values()
+            ->toArray();
+
+        $productTypes = \App\Models\Product::whereIn('product_id', $productIds)
+            ->pluck('product_type', 'product_id'); // ['product_id' => 'product_type']
+
+        // Cek apakah ADA item yang bukan glassware (wajib expiry)
+        $hasNonGlassware = collect($items)->contains(function ($item) use ($productTypes) {
+            $type = $productTypes[$item['product_id'] ?? null] ?? null;
+            return $type !== 'glassware';
+        });
+
+        // Cek apakah SEMUA item glassware (batch_number tidak wajib)
+        $allGlassware = collect($items)->every(function ($item) use ($productTypes) {
+            $type = $productTypes[$item['product_id'] ?? null] ?? null;
+            return $type === 'glassware';
+        });
+
+        // batch_number: nullable jika semua glassware, required jika ada non-glassware
+        $rules['items.*.batch_number'] = $allGlassware
+            ? 'nullable|string|max:100'
+            : 'required|string|max:100';
+
+        // expiry_date: setelah manufacture_date jika ada non-glassware
+        $rules['items.*.expiry_date'] = $hasNonGlassware
+            ? 'nullable|date|after_or_equal:items.*.manufacture_date'
+            : 'nullable|date';
+
+        return $rules;
+    }
+
+
+    /**
      * Get pending delivery notes for dropdown
      * GET /api/supplier-delivery-notes/pending
      */
@@ -810,7 +882,7 @@ public function createDraftDeliveryNote(Request $request, $supplierPoId)
         return response()->json([
             'success' => true,
             'message' => 'Pending delivery notes retrieved successfully',
-            'data'    => $query->get(),
+            'data' => $query->get(),
         ], 200);
     }
 
@@ -820,13 +892,14 @@ public function createDraftDeliveryNote(Request $request, $supplierPoId)
     private function updateSupplierPoStatus($supplierPoId)
     {
         $po = \App\Models\SupplierPurchaseOrder::find($supplierPoId);
-        if (!$po) return;
+        if (!$po)
+            return;
 
-        $items         = DB::table('supplier_purchase_order_items')
+        $items = DB::table('supplier_purchase_order_items')
             ->where('supplier_po_id', $supplierPoId)
             ->get();
 
-        $totalOrdered  = $items->sum('quantity');
+        $totalOrdered = $items->sum('quantity');
         $totalReceived = $items->sum('received_quantity');
 
         if ($totalReceived >= $totalOrdered) {

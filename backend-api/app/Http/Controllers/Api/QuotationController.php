@@ -67,7 +67,7 @@ class QuotationController extends BaseController  // ✅ Extend BaseController
             $query->orderBy('quotation_id', 'desc');
         }
 
-       
+
 
         $perPage    = $request->get('per_page', 15);
         $quotations = $query->paginate($perPage);
@@ -145,7 +145,7 @@ class QuotationController extends BaseController  // ✅ Extend BaseController
             'items.*.category'      => 'nullable|string|max:100',
             'items.*.unit'          => 'nullable|string|max:50',
             'items.*.product_code' => 'nullable|string|max:100',
-          
+
             // Rule: kalau indent, supplier_id wajib
             'items.*.supplier_id' => [
                 'nullable',
@@ -285,7 +285,7 @@ class QuotationController extends BaseController  // ✅ Extend BaseController
             'items.*.category'      => 'nullable|string|max:100',
             'items.*.unit'          => 'nullable|string|max:50',
             'items.*.product_code' => 'nullable|string|max:100',
-         
+
             'items.*.supplier_id' => [
                 'nullable',
                 'exists:suppliers,supplier_id',
@@ -473,7 +473,7 @@ class QuotationController extends BaseController  // ✅ Extend BaseController
             return response()->json([
                 'success' => true,
                 'message' => 'Quotation issued successfully',
-                'data'    => $quotation->load(['issuedByUser']),    
+                'data'    => $quotation->load(['issuedByUser']),
             ], 200);
         } catch (\Exception $e) {
             return response()->json([
@@ -484,105 +484,111 @@ class QuotationController extends BaseController  // ✅ Extend BaseController
         }
     }
 
-    public function convertToPurchaseOrder(Request $request, $id)
-    {
-        $companyId = $this->getCompanyId($request);
-        $quotation = Quotation::with(['items'])
-            ->where('company_id', $companyId)
-            ->find($id);
+  public function convertToPurchaseOrder(Request $request, $id)
+{
+    $companyId = $this->getCompanyId($request);
+    $quotation = Quotation::with(['items'])
+        ->where('company_id', $companyId)
+        ->find($id);
 
-        if (!$quotation) {
-            return response()->json(['success' => false, 'message' => 'Quotation not found'], 404);
-        }
+    if (!$quotation) {
+        return response()->json(['success' => false, 'message' => 'Quotation not found'], 404);
+    }
 
-        if ($quotation->status !== 'approved') {
-            return response()->json([
-                'success'        => false,
-                'message'        => 'Only approved quotations can be converted to purchase order',
-                'current_status' => $quotation->status,
-            ], 422);
-        }
-         $existingPO = PurchaseOrder::where('quotation_id', $id)->first();
+    if ($quotation->status !== 'approved') {
+        return response()->json([
+            'success'        => false,
+            'message'        => 'Only approved quotations can be converted to purchase order',
+            'current_status' => $quotation->status,
+        ], 422);
+    }
+
+    // ✅ Cek existing PO SEBELUM validasi — lebih informatif
+    $existingPO = PurchaseOrder::where('quotation_id', $id)->first();
     if ($existingPO) {
         return response()->json([
             'success'     => false,
-            'message'     => "Quotation ini sudah dikonversi ke Purchase Order #{$existingPO->po_number}",
+            'message'     => "Quotation ini sudah dikonversi ke PO #{$existingPO->po_number}",
             'existing_po' => [
                 'po_id'     => $existingPO->po_id,
                 'po_number' => $existingPO->po_number,
                 'status'    => $existingPO->status,
             ],
+        ], 409); // ✅ 409 Conflict, bukan 422
+    }
+
+    $validator = Validator::make($request->all(), [
+        // ✅ unique tapi IGNORE po_number yang mungkin sudah ada untuk quotation_id ini
+        'po_number'        => 'required|string|max:100|unique:purchase_orders,po_number',
+        'po_date'          => 'required|date',
+        'po_customer_file' => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Validation error',
+            'errors'  => $validator->errors(),
         ], 422);
     }
 
-        $validator = Validator::make($request->all(), [
-            'po_number'         => 'required|string|max:100|unique:purchase_orders,po_number',
-            'po_date'           => 'required|date',
-            'po_customer_file'  => 'required|file|mimes:pdf,jpg,jpeg,png|max:5120',
+    DB::beginTransaction();
+    try {
+        $totalAmount = $quotation->items->reduce(
+            fn($carry, $item) => $carry + ($item->quantity * $item->unit_price),
+            0
+        );
+
+        $po = PurchaseOrder::create([
+            'company_id'       => $companyId,
+            'customer_id'      => $quotation->customer_id,
+            'quotation_id'     => $quotation->quotation_id,
+            'activity_type_id' => $quotation->activity_type_id,
+            'po_number'        => $request->po_number,
+            'po_date'          => $request->po_date,
+            'valid_until'      => $quotation->valid_until ?? $request->po_date,
+            'status'           => 'draft',
+            'notes'            => $quotation->notes,
+            'total_amount'     => $totalAmount,
+            'created_by'       => Auth::id(),
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation error',
-                'errors'  => $validator->errors(),
-            ], 422);
-        }
-
-        DB::beginTransaction();
-        try {
-            $totalAmount = $quotation->items->sum(
-                fn($item) => $item->quantity * $item->unit_price
-            );
-
-            $po = PurchaseOrder::create([
-                'company_id'       => $companyId,  // ✅ Dari session
-                'customer_id'      => $quotation->customer_id,
-                'quotation_id'     => $quotation->quotation_id,
-                'activity_type_id' => $quotation->activity_type_id,
-                'po_number'        => $request->po_number,
-                'po_date'          => $request->po_date,
-                'valid_until'      => $quotation->valid_until ?? $request->po_date,
-                'status'           => 'draft',
-                'notes'            => $quotation->notes,
-                'total_amount'     => $totalAmount,
-                'created_by'       => Auth::id(),
+        foreach ($quotation->items as $quotItem) {
+            PurchaseOrderItem::create([
+                'po_id'            => $po->po_id,
+                'product_id'       => $quotItem->product_id,
+                'product_name'     => $quotItem->product_name,
+                'specification'    => null,
+                'quantity'         => $quotItem->quantity,
+                'unit'             => 'pcs',
+                'unit_price'       => $quotItem->unit_price,
+                'discount_percent' => 0,
+                'notes'            => $quotItem->notes,
             ]);
-
-            foreach ($quotation->items as $quotItem) {
-                PurchaseOrderItem::create([
-                    'po_id'            => $po->po_id,
-                    'product_id'       => $quotItem->product_id,
-                    'product_name'     => $quotItem->product_name,
-                    'specification'    => null,
-                    'quantity'         => $quotItem->quantity,
-                    'unit'             => 'pcs',
-                    'unit_price'       => $quotItem->unit_price,
-                    'discount_percent' => 0,
-                    'notes'            => $quotItem->notes,
-                ]);
-            }
-
-            if ($request->hasFile('po_customer_file')) {
-                $po->uploadPoCustomerFile($request->file('po_customer_file'));
-            }
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Quotation converted to purchase order successfully',
-                'data'    => $po->load(['company', 'customer', 'items']),
-            ], 201);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to convert quotation to purchase order',
-                'error'   => $e->getMessage(),
-            ], 500);
         }
+
+        if ($request->hasFile('po_customer_file')) {
+            $po->uploadPoCustomerFile($request->file('po_customer_file'));
+        }
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Quotation converted to purchase order successfully',
+            'data'    => $po->load(['company', 'customer', 'items']),
+        ], 201);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to convert quotation to purchase order',
+            'error'   => $e->getMessage(),
+        ], 500);
     }
+}
+
     public function generateNumber()
     {
         $year = date('Y');

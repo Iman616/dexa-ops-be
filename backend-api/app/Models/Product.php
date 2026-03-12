@@ -16,7 +16,7 @@ class Product extends Model
         'product_code',
         'product_name',
         'category',
-        'product_type',      // ✅ NEW
+        'product_type',  
         'brand',
         'unit',
         'supplier_id',

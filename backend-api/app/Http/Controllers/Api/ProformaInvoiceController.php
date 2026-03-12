@@ -577,68 +577,80 @@ class ProformaInvoiceController extends BaseController  // ✅ extends BaseContr
     /* =========================
      * CONVERT TO INVOICE
      * ========================= */
-    public function convertToInvoice(Request $request, $id)
-    {
-        try {
-            $companyId = $this->getCompanyId($request);
+  public function convertToInvoice(Request $request, $id)
+{
+    try {
+        $companyId = $this->getCompanyId($request);
 
-            $proforma = ProformaInvoice::with(['items.product', 'company', 'customer'])
-                ->where('company_id', $companyId)
-                ->find($id);
+        $proforma = ProformaInvoice::with(['items.product', 'company', 'customer'])
+            ->where('company_id', $companyId)
+            ->find($id);
 
-            if (!$proforma) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Proforma invoice tidak ditemukan'
-                ], 404);
-            }
-
-            if ($proforma->status !== 'approved') {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Hanya proforma invoice approved yang bisa dikonversi'
-                ], 422);
-            }
-
-            if ($proforma->converted_to_invoice_id) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Proforma invoice sudah dikonversi ke invoice',
-                    'data' => ['invoice_id' => $proforma->converted_to_invoice_id]
-                ], 422);
-            }
-
-            // ✅ FIX 1: Generate invoice_number dulu sebelum dikirim
-            $invoiceNumber = $this->generateInvoiceNumber($companyId);
-
-            $invoiceController = new InvoiceController();
-
-            $newRequest = new \Illuminate\Http\Request([
-                'company_id' => $companyId,           // ✅ fallback getCompanyId
-                'proforma_invoice_id' => $proforma->proforma_id,
-                'invoice_number' => $invoiceNumber,       // ✅ wajib ada di validator
-                'invoice_date' => now()->format('Y-m-d'),
-                'due_date' => now()->addDays(30)->format('Y-m-d'),
-                'payment_terms' => $proforma->payment_terms ?? 'Net 30 hari',
-                'delivery_terms' => $proforma->delivery_terms ?? 'FOB Destination',
-                'create_tax_invoice' => true,
-            ]);
-
-            // ✅ FIX 2: Transfer user resolver agar $request->user() tidak null
-            $newRequest->setUserResolver($request->getUserResolver());
-
-            // ✅ Hapus DB::beginTransaction() di sini — biarkan createFromProformaInvoice
-            //    yang handle transaction-nya sendiri (nested transaction = rawan bug)
-            return $invoiceController->createFromProformaInvoice($newRequest);
-
-        } catch (Exception $e) {
+        if (!$proforma) {
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal mengkonversi ke invoice',
-                'error' => $e->getMessage()
-            ], 500);
+                'message' => 'Proforma invoice tidak ditemukan'
+            ], 404);
         }
+
+        if ($proforma->status !== 'approved') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Hanya proforma invoice yang sudah disetujui customer (approved) yang bisa dikonversi ke Invoice'
+            ], 422);
+        }
+
+        if ($proforma->converted_to_invoice_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Proforma invoice sudah pernah dikonversi ke invoice',
+                'data' => ['invoice_id' => $proforma->converted_to_invoice_id]
+            ], 409);
+        }
+
+        // ✅ Validasi konfirmasi pembayaran wajib dilampirkan
+        $validator = Validator::make($request->all(), [
+            'payment_confirmed' => 'required|boolean|accepted',
+            'payment_reference'  => 'nullable|string|max:100',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Konfirmasi pembayaran diperlukan sebelum konversi ke Invoice',
+                'errors'  => $validator->errors()
+            ], 422);
+        }
+
+        $invoiceNumber = $this->generateInvoiceNumber($companyId);
+
+        $invoiceController = new InvoiceController();
+
+        $newRequest = new \Illuminate\Http\Request([
+            'company_id'          => $companyId,
+            'proforma_invoice_id' => $proforma->proforma_id,
+            'invoice_number'      => $invoiceNumber,
+            'invoice_date'        => now()->format('Y-m-d'),
+            'due_date'            => now()->addDays(30)->format('Y-m-d'),
+            'payment_terms'       => $proforma->payment_terms ?? 'Net 30 hari',
+            'delivery_terms'      => $proforma->delivery_terms ?? 'FOB Destination',
+            'payment_reference'   => $request->payment_reference,  // ✅ referensi bukti bayar
+            'create_tax_invoice'  => true,
+        ]);
+
+        $newRequest->setUserResolver($request->getUserResolver());
+
+        return $invoiceController->createFromProformaInvoice($newRequest);
+
+    } catch (Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal mengkonversi ke invoice',
+            'error'   => $e->getMessage()
+        ], 500);
     }
+}
+
 
     /* =========================
      * INVOICE NUMBER GENERATOR

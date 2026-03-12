@@ -74,113 +74,121 @@ class PaymentController extends BaseController  // ✅ extends BaseController
     /* =========================
      * STORE
      * ========================= */
-    public function store(Request $request)
-    {
-        $validator = Validator::make($request->all(), [
-            'invoice_id'        => 'required|exists:invoices,invoice_id',
-            'payment_type'      => 'nullable|in:dp,installment,full',
-            'amount'            => 'required|numeric|min:1',
-            'payment_date'      => 'required|date',
-            'payment_method'    => 'required|in:cash,transfer,va,ewallet,credit_card,debit_card,cheque,other',
-            'bank_name'         => 'nullable|string|max:100',
-            'account_number'    => 'nullable|string|max:100',
-            'account_holder'    => 'nullable|string|max:255',
-            'reference_number'  => 'nullable|string|max:100',
-            'gateway_reference' => 'nullable|string|max:255',
-            'notes'             => 'nullable|string',
-            'proof_file'        => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:5120',
-        ]);
+  public function store(Request $request)
+{
+    $validator = Validator::make($request->all(), [
+        'invoice_id'        => 'required|exists:invoices,invoice_id',
+        'payment_type'      => 'nullable|in:dp,installment,full',
+        'amount'            => 'required|numeric|min:1',
+        'payment_date'      => 'required|date',
+        'payment_method'    => 'required|in:cash,transfer,va,ewallet,credit_card,debit_card,cheque,other',
+        'bank_name'         => 'nullable|string|max:100',
+        'account_number'    => 'nullable|string|max:100',
+        'account_holder'    => 'nullable|string|max:255',
+        'reference_number'  => 'nullable|string|max:100',
+        'gateway_reference' => 'nullable|string|max:255',
+        'notes'             => 'nullable|string',
+        'proof_file'        => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:5120',
 
-        if ($validator->fails()) {
+        // ✅ NEW: Bukti potong & PPN
+        'withholding_file'    => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:5120',
+        'withholding_amount'  => 'nullable|numeric|min:0',
+        'invoice_amount'      => 'nullable|numeric|min:0',
+        'payment_amount_net'  => 'nullable|numeric|min:0', // jumlah bayar bersih setelah potong
+        'ppn_file'            => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:5120',
+        'ppn_amount'          => 'nullable|numeric|min:0',
+    ]);
+
+    if ($validator->fails()) {
+        return response()->json(['success' => false, 'message' => 'Validation error', 'errors' => $validator->errors()], 422);
+    }
+
+    DB::beginTransaction();
+    try {
+        $companyId = $this->getCompanyId($request);
+        $invoice   = Invoice::with('payments')
+            ->where('company_id', $companyId)
+            ->find($request->invoice_id);
+
+        if (!$invoice) {
+            return response()->json(['success' => false, 'message' => 'Invoice tidak ditemukan'], 404);
+        }
+
+        $totalPaidSuccess = $invoice->payments->where('status', 'success')->sum('amount');
+        $remainingAmount  = max(0, (float) $invoice->total_amount - $totalPaidSuccess);
+
+        if ((float) $request->amount > $remainingAmount + 0.01) {
             return response()->json([
                 'success' => false,
-                'message' => 'Validation error',
-                'errors'  => $validator->errors(),
+                'message' => 'Jumlah pembayaran melebihi sisa tagihan',
+                'data'    => ['remaining_amount' => $remainingAmount, 'requested_amount' => $request->amount],
             ], 422);
         }
 
-        DB::beginTransaction();
-        try {
-            $companyId = $this->getCompanyId($request); // ✅
-
-            // ✅ Pastikan invoice milik company aktif
-            $invoice = Invoice::with('payments')
-                ->where('company_id', $companyId)
-                ->find($request->invoice_id);
-
-            if (!$invoice) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Invoice tidak ditemukan atau bukan milik company aktif',
-                ], 404);
-            }
-
-            $totalPaidSuccess = $invoice->payments
-                ->where('status', 'success')
-                ->sum('amount');
-            $remainingAmount = max(0, (float) $invoice->total_amount - $totalPaidSuccess);
-
-            if ((float) $request->amount > $remainingAmount + 0.01) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Jumlah pembayaran melebihi sisa tagihan',
-                    'data'    => [
-                        'remaining_amount' => $remainingAmount,
-                        'requested_amount' => $request->amount,
-                    ],
-                ], 422);
-            }
-
-            $proofFilePath = null;
-            if ($request->hasFile('proof_file')) {
-                $file          = $request->file('proof_file');
-                $filename      = time() . '_' . $file->getClientOriginalName();
-                $proofFilePath = $file->storeAs('payment_proofs', $filename, 'public');
-            }
-
-            $lastPayment = Payment::whereNotNull('payment_number')
-                ->orderBy('payment_id', 'desc')
-                ->lockForUpdate()
-                ->first();
-
-            $nextNumber    = $lastPayment ? (int) substr($lastPayment->payment_number, -4) + 1 : 1;
-            $paymentNumber = 'PAY-' . date('Ym') . '-' . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
-
-            $payment = Payment::create([
-                'invoice_id'        => $request->invoice_id,
-                'payment_number'    => $paymentNumber,
-                'payment_type'      => $request->payment_type,
-                'amount'            => $request->amount,
-                'payment_date'      => $request->payment_date,
-                'status'            => 'pending',
-                'payment_method'    => $request->payment_method,
-                'bank_name'         => $request->bank_name,
-                'account_number'    => $request->account_number,
-                'account_holder'    => $request->account_holder,
-                'reference_number'  => $request->reference_number,
-                'gateway_reference' => $request->gateway_reference,
-                'notes'             => $request->notes,
-                'proof_file_path'   => $proofFilePath,
-                'created_by'        => Auth::id(),
-            ]);
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Payment berhasil dibuat, menunggu approval',
-                'data'    => $payment->load(['invoice.customer', 'createdByUser']),
-            ], 201);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json([
-                'success' => false,
-                'message' => 'Gagal membuat payment',
-                'error'   => $e->getMessage(),
-            ], 500);
+        // Upload proof file
+        $proofFilePath = null;
+        if ($request->hasFile('proof_file')) {
+            $file          = $request->file('proof_file');
+            $proofFilePath = $file->storeAs('payment_proofs', time() . '_' . $file->getClientOriginalName(), 'public');
         }
+
+        // ✅ Upload bukti potong
+        $withholdingFilePath = null;
+        if ($request->hasFile('withholding_file')) {
+            $file                = $request->file('withholding_file');
+            $withholdingFilePath = $file->storeAs('payment_withholding', time() . '_' . $file->getClientOriginalName(), 'public');
+        }
+
+        // ✅ Upload PPN
+        $ppnFilePath = null;
+        if ($request->hasFile('ppn_file')) {
+            $file        = $request->file('ppn_file');
+            $ppnFilePath = $file->storeAs('payment_ppn', time() . '_' . $file->getClientOriginalName(), 'public');
+        }
+
+        // Generate payment number
+        $lastPayment   = Payment::orderBy('payment_id', 'desc')->lockForUpdate()->first();
+        $nextNumber    = $lastPayment ? (int) substr($lastPayment->payment_number, -4) + 1 : 1;
+        $paymentNumber = 'PAY-' . date('Ym') . '-' . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
+
+        $payment = Payment::create([
+            'invoice_id'          => $request->invoice_id,
+            'payment_number'      => $paymentNumber,
+            'payment_type'        => $request->payment_type,
+            'amount'              => $request->amount,
+            'payment_date'        => $request->payment_date,
+            'status'              => 'pending',
+            'payment_method'      => $request->payment_method,
+            'bank_name'           => $request->bank_name,
+            'account_number'      => $request->account_number,
+            'account_holder'      => $request->account_holder,
+            'reference_number'    => $request->reference_number,
+            'gateway_reference'   => $request->gateway_reference,
+            'notes'               => $request->notes,
+            'proof_file_path'     => $proofFilePath,
+            // ✅ NEW
+            'withholding_file_path' => $withholdingFilePath,
+            'withholding_amount'    => $request->withholding_amount,
+            'invoice_amount'        => $request->invoice_amount,
+            'payment_amount_net'    => $request->payment_amount_net,
+            'ppn_file_path'         => $ppnFilePath,
+            'ppn_amount'            => $request->ppn_amount,
+            'created_by'            => Auth::id(),
+        ]);
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Payment berhasil dibuat, menunggu approval',
+            'data'    => $payment->load(['invoice.customer', 'createdByUser']),
+        ], 201);
+    } catch (\Exception $e) {
+        DB::rollBack();
+        return response()->json(['success' => false, 'message' => 'Gagal membuat payment', 'error' => $e->getMessage()], 500);
     }
+}
+
 
     /* =========================
      * SHOW

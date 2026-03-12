@@ -4,140 +4,127 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Quotation;
+use App\Models\DocumentTerm;
+use App\Models\Tax;
 use Barryvdh\DomPDF\Facade\Pdf;
 
 class QuotationPDFController extends Controller
 {
-    /**
-     * Generate PDF Quotation
-     */
-public function generate($id)
-{
-    $quotation = Quotation::with([
-        'company',
-        'customer',
-        'items.product', // ✅ Pastikan ini ada
-        'createdByUser',
-        'issuedByUser'
-    ])->find($id);
+    /* ── STREAM ── */
+    public function generate($id)
+    {
+        [$quotation, $data] = $this->buildPdfData($id);
 
-    if (!$quotation) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Quotation not found'
-        ], 404);
+        if (!$quotation) {
+            return response()->json(['success' => false, 'message' => 'Quotation not found'], 404);
+        }
+
+        if ($quotation->status === 'draft') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot generate PDF for draft quotation. Please issue the quotation first.',
+            ], 422);
+        }
+
+        $pdf = Pdf::loadView('pdf.quotation', $data)->setPaper('A4', 'portrait');
+
+        return $pdf->stream('Quotation-' . $this->sanitizeFilename($quotation->quotation_number) . '.pdf');
     }
 
-    // Validasi: tidak bisa generate PDF jika masih draft
-    if ($quotation->status === 'draft') {
-        return response()->json([
-            'success' => false,
-            'message' => 'Cannot generate PDF for draft quotation. Please issue the quotation first.'
-        ], 422);
-    }
-
-    // Calculate totals
-    $subtotal = $quotation->total_amount;
-    $dpp = $subtotal / 1.12;
-    $ppn = $dpp * 0.12;
-    $total = $dpp + $ppn;
-
-    $data = [
-        'quotation' => $quotation,
-        'subtotal' => $subtotal,
-        'dpp' => $dpp,
-        'ppn' => $ppn,
-        'total' => $total,
-    ];
-$taxRate = \App\Models\Tax::where('is_active', true)
-    ->where('tax_name', 'LIKE', '%PPN%')
-    ->orderByDesc('created_at')
-    ->value('tax_rate') ?? 12.0;
-
-$dpp   = round($subtotal * ($taxRate / ($taxRate + 1)));
-$ppn   = round($dpp * ($taxRate / 100));
-$total = $subtotal + $ppn;
-
-$pdf = Pdf::loadView('pdf.quotation', [
-    'quotation' => $quotation,
-    'subtotal'  => $subtotal,
-    'dpp'       => $dpp,
-    'ppn'       => $ppn,
-    'total'     => $total,
-    'taxRate'   => $taxRate,  // ✅ TAMBAH
-]);
-    $pdf->setPaper('A4', 'portrait');
-
-    $filename = $this->sanitizeFilename($quotation->quotation_number);
-
-    return $pdf->stream('Quotation-' . $filename . '.pdf');
-}
-
-
-    /**
-     * Download PDF
-     */
+    /* ── DOWNLOAD ── */
     public function download($id)
+    {
+        [$quotation, $data] = $this->buildPdfData($id);
+
+        if (!$quotation) {
+            return response()->json(['success' => false, 'message' => 'Quotation not found'], 404);
+        }
+
+        if ($quotation->status === 'draft') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot generate PDF for draft quotation. Please issue the quotation first.',
+            ], 422);
+        }
+
+        $pdf = Pdf::loadView('pdf.quotation', $data)->setPaper('A4', 'portrait');
+
+        return $pdf->download('Quotation-' . $this->sanitizeFilename($quotation->quotation_number) . '.pdf');
+    }
+
+    /* ── SHARED DATA BUILDER ── */
+    private function buildPdfData($id): array
     {
         $quotation = Quotation::with([
             'company',
             'customer',
             'items.product',
             'createdByUser',
-            'issuedByUser'
+            'issuedByUser',
         ])->find($id);
 
         if (!$quotation) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Quotation not found'
-            ], 404);
+            return [null, []];
         }
 
-        // Validasi: tidak bisa generate PDF jika masih draft
-        if ($quotation->status === 'draft') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Cannot generate PDF for draft quotation. Please issue the quotation first.'
-            ], 422);
+        // ✅ Tax rate dari DB
+        $taxRate = Tax::where('is_active', true)
+            ->where('tax_name', 'LIKE', '%PPN%')
+            ->orderByDesc('created_at')
+            ->value('tax_rate') ?? 11.0;
+
+        // ✅ Hitung total
+        $subtotal = (float) $quotation->total_amount;
+        $dpp      = round($subtotal * ($taxRate / ($taxRate + 1)));
+        $ppn      = round($dpp * ($taxRate / 100));
+        $total    = $subtotal + $ppn;
+
+        // ✅ Ambil terms dinamis dari DB, replace placeholder
+        $terms = DocumentTerm::where('company_id', $quotation->company_id)
+            ->where('document_type', 'quotation')
+            ->where('is_active', true)
+            ->orderBy('sort_order')
+            ->get()
+            ->map(fn($term) => str_replace(
+                ['{tax_rate}', '{tax_rate_plus_one}', '{company_name}', '{quotation_number}'],
+                [
+                    round($taxRate),
+                    round($taxRate + 1),
+                    $quotation->company->company_name ?? '',
+                    $quotation->quotation_number,
+                ],
+                $term->term_content
+            ));
+
+        // ✅ Fallback jika DB kosong — pakai hardcoded default
+        if ($terms->isEmpty()) {
+            $terms = collect([
+                'Dengan terbitnya Surat Pesanan atau Surat Perintah Kerja, kami anggap telah mengerti dan menyetujui segala informasi produk yang tercantum dalam Quotation.',
+                'Item ready stock tidak mengikat.',
+                'Kondisi lamanya waktu indent dapat berubah-ubah sesuai dengan kondisi dari prinsipal dan kendala lainnya.',
+                'Berdasarkan PMK No. 131 PPN ' . round($taxRate) . '% x ' . round($taxRate) . '/' . round($taxRate + 1) . ' x Harga Jual',
+            ]);
         }
 
-        // Calculate totals
-        $subtotal = $quotation->total_amount;
-        $dpp = $subtotal / 1.12; // DPP = Total / 1.12
-        $ppn = $dpp * 0.12;       // PPN 12% dari DPP
-        $total = $dpp + $ppn;     // Total = DPP + PPN
-
-        $data = [
-            'quotation' => $quotation,
-            'subtotal' => $subtotal,
-            'dpp' => $dpp,
-            'ppn' => $ppn,
-            'total' => $total,
+        return [
+            $quotation,
+            [
+                'quotation' => $quotation,
+                'subtotal'  => $subtotal,
+                'dpp'       => $dpp,
+                'ppn'       => $ppn,
+                'total'     => $total,
+                'taxRate'   => $taxRate,
+                'terms'     => $terms,  // ✅ inject ke blade
+            ],
         ];
-
-        $pdf = Pdf::loadView('pdf.quotation', $data);
-        $pdf->setPaper('A4', 'portrait');
-
-        // Sanitize filename untuk menghindari error karakter / atau \
-        $filename = $this->sanitizeFilename($quotation->quotation_number);
-
-        return $pdf->download('Quotation-' . $filename . '.pdf');
     }
 
-    /**
-     * Sanitize filename untuk menghapus karakter yang tidak diizinkan
-     * Karakter yang dihapus: / \ : * ? " < > |
-     */
-    private function sanitizeFilename($filename)
+    /* ── SANITIZE FILENAME ── */
+    private function sanitizeFilename(string $filename): string
     {
-        // Replace karakter yang tidak diizinkan dengan dash
         $filename = str_replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], '-', $filename);
-
-        // Ganti spasi dengan underscore
         $filename = preg_replace('/\s+/', '_', $filename);
-
-        // Hapus karakter special lainnya, hanya izinkan: huruf, angka, dash, underscore
         $filename = preg_replace('/[^A-Za-z0-9\-_]/', '', $filename);
 
         return $filename;

@@ -122,11 +122,7 @@
 <div class="header">
     <h1>INVOICE</h1>
     <h2>{{ $invoice->invoice_number }}</h2>
-    @if($usePpn)
-        <span class="badge-ppn">Invoice PPN</span>
-    @else
-        <span class="badge-nonppn">Invoice Non-PPN</span>
-    @endif
+
 </div>
 
 {{-- ══ Company Info (non-PPN tampilkan company info di sini, bukan kop) ══ --}}
@@ -220,18 +216,18 @@
         {{-- DPP Nilai Lain — hanya untuk PPN --}}
         @if($usePpn && $dppLainnya > 0)
         <tr class="dpp-row">
-            <td>DPP Lainnya (Konversi {{ round($taxRate) }}/{{ round($taxRate + 1) }})</td>
+            <td>DPP Lainnya</td>
             <td class="text-right">: Rp &nbsp;{{ $fmt($dppLainnya) }}</td>
         </tr>
 
         <tr>
-<td><strong>Total Pajak (PPN {{ round($taxRate) }}%)</strong></td>            <td class="text-right">: Rp &nbsp;{{ $fmt($ppnAmount) }}</td>
+<td><strong>Total PPN </strong></td>            <td class="text-right">: Rp &nbsp;{{ $fmt($ppnAmount) }}</td>
         </tr>
         @endif
 
         {{-- Total Penjualan + Pajak --}}
         <tr class="divider highlight">
-            <td><strong>Total Penjualan + Pajak</strong></td>
+            <td><strong>Total</strong></td>
             <td class="text-right"><strong>: Rp &nbsp;{{ $fmt($totalWithTax) }}</strong></td>
         </tr>
 
@@ -244,30 +240,14 @@
         @endif
 
         {{-- Dibayar --}}
-        <tr>
-            <td><strong>Dibayar</strong></td>
-            <td class="text-right" style="color:green;">: Rp &nbsp;{{ $fmt($totalPaid) }}</td>
-        </tr>
-
+     
         {{-- Kelebihan Bayar --}}
-        @if($overpayment > 0)
-        <tr>
-            <td><strong>Kelebihan Bayar</strong></td>
-            <td class="text-right" style="color:blue;">: + Rp &nbsp;{{ $fmt($overpayment) }}</td>
-        </tr>
-        @endif
+     
 
         {{-- Total Harus Dibayar --}}
-        <tr class="divider">
-            <td><strong>Total Harus Dibayar</strong></td>
-            <td class="text-right" style="color:red;"><strong>: Rp &nbsp;{{ $fmt($outstanding) }}</strong></td>
-        </tr>
+  
 
-        {{-- Diterima Bersih --}}
-        <tr class="highlight-green">
-            <td><strong>Diterima Bersih</strong></td>
-            <td class="text-right" style="color:green;"><strong>: Rp &nbsp;{{ $fmt($netReceived) }}</strong></td>
-        </tr>
+      
 
     </table>
 </div>
@@ -290,7 +270,7 @@
 {{-- ══ Footer ══ --}}
 <div class="footer">
     <p>Thank you for your business!</p>
-    <p>Generated on {{ now()->format('d/m/Y H:i') }}</p>
+    <p> {{ now()->format('d/m/Y H:i') }}</p>
 </div>
 
 </body>

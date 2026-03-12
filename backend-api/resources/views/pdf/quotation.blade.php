@@ -167,7 +167,19 @@
         <td class="text-center">{{ $satuan }}</td>
         <td class="text-right">Rp {{ number_format($item->unit_price, 0, ',', '.') }}</td>
         <td class="text-right">Rp {{ number_format($itemSubtotal, 0, ',', '.') }}</td>
-        <td class="text-center">{{ $item->item_status === 'ready' ? 'READY STOCK' : 'INDENT' }}</td>
+        <td class="text-center">
+        @if($item->item_status === 'ready')
+            READY STOCK
+        @else
+            INDENT
+            @if($item->indent_days)
+            <br>
+            <small style="font-size:7.5pt; color:#555;">
+                ± {{ $item->indent_days }} hari
+            </small>
+            @endif
+        @endif
+        </td>
       </tr>
       @endforeach
 

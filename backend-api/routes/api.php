@@ -1,5 +1,4 @@
 <?php
-
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
@@ -33,15 +32,11 @@ use App\Http\Controllers\Api\SupplierDeliveryNoteController;
 use App\Http\Controllers\Api\TaxInvoiceController;
 use App\Http\Controllers\Api\TaxController;
 use App\Http\Controllers\Api\FinanceSalesReportController;
-
 use App\Http\Controllers\Api\BankGuaranteeController;
 use App\Http\Controllers\Api\TenderReportController;
-
 use App\Http\Controllers\Api\MenuController;
 use App\Http\Controllers\Api\RoleMenuController;
-
 use App\Http\Controllers\Api\FinanceSalesExportController;
-
 use App\Http\Controllers\Api\SupplierProformaInvoiceController;
 use App\Http\Controllers\Api\InternalNotificationController;
 use App\Http\Controllers\Api\ActivityTypeController;
@@ -50,26 +45,11 @@ use App\Http\Controllers\Api\StockReturnController;
 use App\Http\Controllers\Api\AgentPaymentController;
 use App\Http\Controllers\Api\TenderDocumentController;
 use App\Http\Controllers\Api\StockOpnameController;
-
 use App\Http\Controllers\Api\ProductSupplierController;
-
 use App\Http\Controllers\Api\SupplierDeliveryNotePDFController;
-
-
-
-
 use App\Http\Controllers\Api\PurchaseOrderAgentTrackingController;
-
-
-
-
-
-
-
+use App\Http\Controllers\Api\DocumentTermController;
 use App\Http\Controllers\Api\TenderProjectDetailController;
-
-
-
 
 /*
 |--------------------------------------------------------------------------
@@ -111,10 +91,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('users', [CompanyController::class, 'users']);
         Route::post('toggle-active', [CompanyController::class, 'toggleActive']);
     });
-
-
-
-
 
 
     // ==================== PRODUCTS ====================
@@ -337,15 +313,13 @@ Route::middleware('auth:sanctum')->group(function () {
     })->where(['detailId' => '[0-9]+']);
 
     // Supplier Invoices
-    // ✅ UPDATE Supplier Invoice routes
-
     Route::prefix('supplier-invoices')->middleware('auth:sanctum')->group(function () {
         // Draft invoices
-        Route::get('supplier-invoices/{id}/download-tax', [SupplierInvoiceController::class, 'downloadTaxInvoiceFile']);
+        Route::get('/{id}/download-tax', [SupplierInvoiceController::class, 'downloadTaxInvoiceFile']);
 
-        Route::get('/draft', [SupplierInvoiceController::class, 'getDraftInvoices']); // ✅ NEW
-        Route::post('/{id}/issue', [SupplierInvoiceController::class, 'issueDraftInvoice']); // ✅ NEW
-        Route::delete('/{id}/draft', [SupplierInvoiceController::class, 'deleteDraftInvoice']); // ✅ NEW
+        Route::get('/draft', [SupplierInvoiceController::class, 'getDraftInvoices']);
+        Route::post('/{id}/issue', [SupplierInvoiceController::class, 'issueDraftInvoice']);
+        Route::delete('/{id}/draft', [SupplierInvoiceController::class, 'deleteDraftInvoice']);
 
         // Regular invoice CRUD
         Route::get('/', [SupplierInvoiceController::class, 'indexInvoices']);
@@ -364,6 +338,18 @@ Route::middleware('auth:sanctum')->group(function () {
         // Downloads
         Route::get('/{id}/download', [SupplierInvoiceController::class, 'downloadInvoiceFile']);
     });
+
+    // Document Terms
+    Route::prefix('document-terms')->group(function () {
+        Route::get('/', [DocumentTermController::class, 'index']);
+        Route::post('/', [DocumentTermController::class, 'store']);
+        Route::get('/{id}', [DocumentTermController::class, 'show']);
+        Route::put('/{id}', [DocumentTermController::class, 'update']);
+        Route::delete('/{id}', [DocumentTermController::class, 'destroy']);
+        Route::post('/reorder', [DocumentTermController::class, 'reorder']);
+        Route::post('/seed-defaults', [DocumentTermController::class, 'seedDefaults']);
+    });
+
 
     // Supplier Payments
     Route::prefix('supplier-payments')->group(function () {
@@ -389,41 +375,41 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
 
-  // ==================== PURCHASE ORDERS ====================
-Route::prefix('purchase-orders')->group(function () {
+    // ==================== PURCHASE ORDERS ====================
+    Route::prefix('purchase-orders')->group(function () {
 
-    // ── Static routes (HARUS di atas /{id}) ──────────────────────────────
-    Route::get('/generate-number', [PurchaseOrderController::class, 'generateNumber']);
-    Route::post('/check-stock', [PurchaseOrderController::class, 'checkStock']);
-    Route::get('/po-list', [TenderProjectDetailController::class, 'getTenderPOs']);
+        // ── Static routes (HARUS di atas /{id}) ──────────────────────────────
+        Route::get('/generate-number', [PurchaseOrderController::class, 'generateNumber']);
+        Route::post('/check-stock', [PurchaseOrderController::class, 'checkStock']);
+        Route::get('/po-list', [TenderProjectDetailController::class, 'getTenderPOs']);
 
-    // ── CRUD ─────────────────────────────────────────────────────────────
-    Route::get('/', [PurchaseOrderController::class, 'index']);
-    Route::post('/', [PurchaseOrderController::class, 'store']);
-    Route::get('/{id}', [PurchaseOrderController::class, 'show']);
-    Route::put('/{id}', [PurchaseOrderController::class, 'update']);
-    Route::delete('/{id}', [PurchaseOrderController::class, 'destroy']);
+        // ── CRUD ─────────────────────────────────────────────────────────────
+        Route::get('/', [PurchaseOrderController::class, 'index']);
+        Route::post('/', [PurchaseOrderController::class, 'store']);
+        Route::get('/{id}', [PurchaseOrderController::class, 'show']);
+        Route::put('/{id}', [PurchaseOrderController::class, 'update']);
+        Route::delete('/{id}', [PurchaseOrderController::class, 'destroy']);
 
-    // ── Actions ───────────────────────────────────────────────────────────
-    Route::post('/{id}/issue', [PurchaseOrderController::class, 'issue']);
-    Route::patch('/{id}/status', [PurchaseOrderController::class, 'updateStatus']);
-    Route::post('/{id}/process', [PurchaseOrderController::class, 'process']); // ✅ FIX
+        // ── Actions ───────────────────────────────────────────────────────────
+        Route::post('/{id}/issue', [PurchaseOrderController::class, 'issue']);
+        Route::patch('/{id}/status', [PurchaseOrderController::class, 'updateStatus']);
+        Route::post('/{id}/process', [PurchaseOrderController::class, 'process']); 
 
-    // ── File ──────────────────────────────────────────────────────────────
-    Route::get('/{id}/pdf', [PurchaseOrderController::class, 'generatePdf']);
-    Route::get('/{id}/po-file', [PurchaseOrderController::class, 'downloadPoFile']);
-    Route::post('/{id}/upload-po-customer', [PurchaseOrderController::class, 'uploadPoCustomerFile']);
-    Route::get('/{id}/po-customer-file', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
-    // backward compat alias
-    Route::post('/{id}/upload-customer-po', [PurchaseOrderController::class, 'uploadPoCustomerFile']);
-    Route::get('/{id}/download-customer-po', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
+        // ── File ──────────────────────────────────────────────────────────────
+        Route::get('/{id}/pdf', [PurchaseOrderController::class, 'generatePdf']);
+        Route::get('/{id}/po-file', [PurchaseOrderController::class, 'downloadPoFile']);
+        Route::post('/{id}/upload-po-customer', [PurchaseOrderController::class, 'uploadPoCustomerFile']);
+        Route::get('/{id}/po-customer-file', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
+        // backward compat alias
+        Route::post('/{id}/upload-customer-po', [PurchaseOrderController::class, 'uploadPoCustomerFile']);
+        Route::get('/{id}/download-customer-po', [PurchaseOrderController::class, 'downloadPoCustomerFile']);
 
-    // ── Stock ─────────────────────────────────────────────────────────────
-    Route::get('/{id}/validate-stock', [PurchaseOrderController::class, 'validateStock']);
-    Route::post('/{id}/check-shortage', [SupplierPurchaseOrderController::class, 'checkShortage']);
-    Route::post('/{id}/auto-procure', [SupplierPurchaseOrderController::class, 'autoProcure']);
+        // ── Stock ─────────────────────────────────────────────────────────────
+        Route::get('/{id}/validate-stock', [PurchaseOrderController::class, 'validateStock']);
+        Route::post('/{id}/check-shortage', [SupplierPurchaseOrderController::class, 'checkShortage']);
+        Route::post('/{id}/auto-procure', [SupplierPurchaseOrderController::class, 'autoProcure']);
 
-})->where(['id' => '[0-9]+']); // ✅ Constraint biar {id} tidak tangkap static routes
+    })->where(['id' => '[0-9]+']); // ✅ Constraint biar {id} tidak tangkap static routes
 
 
     Route::prefix('tender-documents')->middleware(['auth:sanctum'])->group(function () {

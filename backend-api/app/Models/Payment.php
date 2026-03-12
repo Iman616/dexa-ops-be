@@ -34,6 +34,12 @@ class Payment extends Model
         'cancelled_by',
         'cancelled_at',
         'cancellation_reason',
+          'withholding_file_path',
+    'withholding_amount',
+    'invoice_amount',
+    'payment_amount_net',
+    'ppn_file_path',
+    'ppn_amount',
     ];
 
     protected $casts = [
@@ -46,9 +52,40 @@ class Payment extends Model
     protected $appends = [
         'status_label',
         'formatted_amount',
+            'status_label',
+    'formatted_amount',
+    'withholding_file_url',
+    'ppn_file_url',
+    'has_withholding_file',
+    'has_ppn_file',
+
     ];
 
     /* ================= RELATIONSHIPS ================= */
+
+    public function getWithholdingFileUrlAttribute(): ?string
+{
+    return $this->withholding_file_path
+        ? asset('storage/' . $this->withholding_file_path)
+        : null;
+}
+
+public function getPpnFileUrlAttribute(): ?string
+{
+    return $this->ppn_file_path
+        ? asset('storage/' . $this->ppn_file_path)
+        : null;
+}
+
+public function getHasWithholdingFileAttribute(): bool
+{
+    return !empty($this->withholding_file_path);
+}
+
+public function getHasPpnFileAttribute(): bool
+{
+    return !empty($this->ppn_file_path);
+}
 
     public function invoice()
     {

@@ -18,7 +18,8 @@ use App\Models\Product;
 use App\Models\ProformaInvoice;
 use App\Models\ProformaInvoiceItem;
 
-class PurchaseOrderController extends BaseController  // ✅ Extend BaseController
+
+class PurchaseOrderController extends BaseController
 {
     protected $pdfService;
 
@@ -154,6 +155,8 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
             'activity_name' => 'nullable|string|max:255',
             'items.*.brand' => 'nullable|string|max:100',
             'use_ppn' => 'nullable|boolean',
+            'items.*.product_type' => 'nullable|in:prekursor,bbo,ppi,teknis,glassware,alat_lab',
+            'items.*.supplier_id' => 'nullable|exists:suppliers,supplier_id',
         ]);
 
         if ($validator->fails()) {
@@ -311,6 +314,8 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
             'items.*.product_code' => 'nullable|string|max:100',
             'items.*.category' => 'nullable|string|max:100',
             'items.*.unit' => 'nullable|string|max:50',
+            'items.*.product_type' => 'nullable|in:prekursor,bbo,ppi,teknis,glassware,alat_lab',
+            'items.*.supplier_id' => 'nullable|exists:suppliers,supplier_id',
 
 
         ]);
@@ -995,190 +1000,254 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
         ];
     }
 
+    // ✅ SESUDAH — hanya generate PI + Surat Jalan, TIDAK generate Invoice
     private function handlePOApproval(PurchaseOrder $po, string $paymentType = 'full', bool $usePpn = true): void
     {
-        if ($po->is_tender) {
+        if ($po->is_tender)
             $this->createTenderProject($po);
-        }
-
-        // ✅ Pass $usePpn ke PI dan Invoice
-        $pi = $this->autoGenerateProformaInvoice($po, $paymentType, $usePpn);
+        $this->autoGenerateProformaInvoice($po, $paymentType, $usePpn);
         $this->createDeliveryNote($po);
-
-        if ($paymentType === 'full' && $pi) {
-            $this->autoGenerateInvoice($po, $pi, $usePpn);
-        }
     }
 
 
-    private function autoGenerateProformaInvoice(
-        PurchaseOrder $po,
-        string $paymentType = 'full',
-        bool $usePpn = true   // ✅ TAMBAH parameter
-    ): ?ProformaInvoice {
-        $sudahAdaPI = ProformaInvoice::where('po_id', $po->po_id)
-            ->whereNotIn('status', ['cancelled', 'rejected'])
-            ->exists();
+  private function autoGenerateProformaInvoice(
+    PurchaseOrder $po,
+    string $paymentType = 'full',
+    bool $usePpn = true
+): ?ProformaInvoice {
+    $sudahAdaPI = ProformaInvoice::where('po_id', $po->po_id)
+        ->whereNotIn('status', ['cancelled', 'rejected'])
+        ->exists();
 
-        if ($sudahAdaPI || $po->items->isEmpty())
-            return null;
+    if ($sudahAdaPI || $po->items->isEmpty())
+        return null;
 
-        try {
-            $subtotal = $po->items->reduce(function (float $carry, $item): float {
-                $gross = (float) $item->quantity * (float) $item->unit_price;
-                $discount = $gross * ((float) ($item->discount_percent ?? 0) / 100);
-                return $carry + ($gross - $discount);
-            }, 0.0);
+    try {
+        // ── 1. Subtotal net (setelah diskon per item) ────────────────────
+        $subtotal = $po->items->reduce(function (float $carry, $item): float {
+            $gross    = (float) $item->quantity * (float) $item->unit_price;
+            $discount = $gross * ((float) ($item->discount_percent ?? 0) / 100);
+            return $carry + ($gross - $discount);
+        }, 0.0);
 
-            $taxPercentage = 11;
+        // ── 2. Diskon header ─────────────────────────────────────────────
+        $grossTotal        = $po->items->sum(fn($i) => (float)$i->quantity * (float)$i->unit_price);
+        $totalItemDiscount = $grossTotal - $subtotal;
 
-            // ✅ Hitung pajak hanya jika PPN, pakai exact fraction
-            if ($usePpn) {
-                $dpp = round($subtotal * ($taxPercentage / ($taxPercentage + 1)));
-                $taxAmount = round($dpp * (($taxPercentage + 1) / 100));
-            } else {
-                $taxAmount = 0;
-            }
+        $headerDiscount    = (float) ($po->discount_amount    ?? 0);
+        $headerDiscountPct = (float) ($po->discount_percentage ?? 0);
 
-            $totalAmount = $subtotal + $taxAmount;
-
-            $companyCode = $po->company?->company_code ?? 'XXX';
-            $year = date('Y');
-            $month = date('m');
-            $last = ProformaInvoice::where('company_id', $po->company_id)
-                ->whereYear('proforma_date', $year)
-                ->whereMonth('proforma_date', $month)
-                ->orderByDesc('proforma_id')
-                ->lockForUpdate()
-                ->first();
-            $num = $last ? ((int) substr($last->proforma_number, -5) + 1) : 1;
-            $proformaNumber = "PI/{$companyCode}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
-
-            $paymentNote = $paymentType === 'dp'
-                ? 'Pembayaran: Down Payment (DP). Invoice akan diterbitkan setelah pelunasan.'
-                : 'Pembayaran: Full Payment.';
-
-            $pi = ProformaInvoice::create([
-                'company_id' => $po->company_id,
-                'customer_id' => $po->customer_id,
-                'po_id' => $po->po_id,
-                'proforma_number' => $proformaNumber,
-                'proforma_date' => now()->format('Y-m-d'),
-                'valid_until' => now()->addDays(30)->format('Y-m-d'),
-                'subtotal' => $subtotal,
-                'tax_percentage' => $taxPercentage,
-                'tax_amount' => $taxAmount,
-                'discount_amount' => 0,
-                'total_amount' => $totalAmount,
-                'use_ppn' => $usePpn,   // ✅ SIMPAN
-                'payment_terms' => $paymentType === 'dp' ? 'DP terlebih dahulu, pelunasan menyusul' : 'Full Payment',
-                'delivery_terms' => 'FOB Destination',
-                'status' => 'draft',
-                'notes' => "Auto-generated dari PO {$po->po_number}. {$paymentNote}",
-                'created_by' => Auth::id(),
-            ]);
-
-            foreach ($po->items as $poItem) {
-                ProformaInvoiceItem::create([
-                    'proforma_id' => $pi->proforma_id,
-                    'product_id' => $poItem->product_id,
-                    'product_name' => $poItem->product_name,
-                    'product_description' => $poItem->specification,
-                    'quantity' => $poItem->quantity,
-                    'unit' => $poItem->unit,
-                    'unit_price' => $poItem->unit_price,
-                    'discount_percent' => $poItem->discount_percent ?? 0,  // ✅ jangan lupa diskon
-                    'notes' => $poItem->notes,
-                ]);
-            }
-
-            \Illuminate\Support\Facades\Log::info(
-                "Auto-generated PI {$pi->proforma_number} dari PO {$po->po_number} [{$paymentType}] [use_ppn=" . ($usePpn ? 'true' : 'false') . "]"
-            );
-
-            return $pi;
-
-        } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error("Gagal auto-generate PI untuk PO {$po->po_number}: " . $e->getMessage());
-            return null;
+        if ($headerDiscount > 0) {
+            // Prioritas 1: nominal dari header PO
+            $discountAmount     = round($headerDiscount, 2);
+            $discountPercentage = $grossTotal > 0
+                ? round($discountAmount / $grossTotal * 100, 2)
+                : 0;
+        } elseif ($headerDiscountPct > 0) {
+            // Prioritas 2: persen dari header PO
+            $discountAmount     = round($subtotal * $headerDiscountPct / 100, 2);
+            $discountPercentage = $headerDiscountPct;
+        } else {
+            // Fallback: akumulasi diskon per item
+            $discountAmount     = round($totalItemDiscount, 2);
+            $discountPercentage = $grossTotal > 0
+                ? round($discountAmount / $grossTotal * 100, 2)
+                : 0;
         }
-    }
 
-    private function autoGenerateInvoice(
-        PurchaseOrder $po,
-        ProformaInvoice $pi,
-        bool $usePpn = true   // ✅ TAMBAH parameter
-    ): void {
-        $sudahAda = \App\Models\Invoice::where('po_id', $po->po_id)
-            ->orWhere('proforma_invoice_id', $pi->proforma_id)
-            ->exists();
+        // ── 3. Base untuk PPN (subtotal setelah diskon header) ───────────
+        $baseForTax = round($subtotal - $discountAmount, 2);
 
-        if ($sudahAda)
-            return;
-
-        try {
-            $companyCode = $po->company?->company_code ?? 'XXX';
-            $year = date('Y');
-            $month = date('m');
-            $last = \App\Models\Invoice::where('company_id', $po->company_id)
-                ->whereYear('invoice_date', $year)
-                ->whereMonth('invoice_date', $month)
-                ->orderByDesc('invoice_id')
-                ->lockForUpdate()
-                ->first();
-            $num = $last ? ((int) substr($last->invoice_number, -5) + 1) : 1;
-            $invoiceNumber = "INV/{$companyCode}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
-
-            $invoice = \App\Models\Invoice::create([
-                'company_id' => $po->company_id,
-                'customer_id' => $po->customer_id,
-                'po_id' => $po->po_id,
-                'proforma_invoice_id' => $pi->proforma_id,
-                'invoice_number' => $invoiceNumber,
-                'invoice_date' => now()->format('Y-m-d'),
-                'due_date' => now()->addDays(30)->format('Y-m-d'),
-                'subtotal' => $pi->subtotal,
-                'tax_percentage' => $pi->tax_percentage,
-                'tax_amount' => $pi->tax_amount,
-                'discount_amount' => $pi->discount_amount,
-                'total_amount' => $pi->total_amount,
-                'use_ppn' => $usePpn,   // ✅ SIMPAN
-                'payment_status' => 'unpaid',
-                'payment_terms' => 'Full Payment',
-                'delivery_terms' => 'FOB Destination',
-                'currency' => 'IDR',
-                'notes' => "Auto-generated dari PO {$po->po_number} (Full Payment)",
-                'created_by' => Auth::id(),
-            ]);
-
-            foreach ($pi->items as $piItem) {
-                \App\Models\InvoiceItem::create([
-                    'invoice_id' => $invoice->invoice_id,
-                    'product_id' => $piItem->product_id,
-                    'product_name' => $piItem->product_name,
-                    'product_description' => $piItem->product_description,
-                    'quantity' => $piItem->quantity,
-                    'unit' => $piItem->unit,
-                    'unit_price' => $piItem->unit_price,
-                    'discount_percent' => $piItem->discount_percent ?? 0,  // ✅ bawa diskon dari PI
-                    'notes' => $piItem->notes,
-                ]);
-            }
-
-            $pi->update([
-                'status' => 'converted',
-                'converted_to_invoice_id' => $invoice->invoice_id,
-                'converted_at' => now(),
-            ]);
-
-            \Illuminate\Support\Facades\Log::info(
-                "Auto-generated Invoice {$invoice->invoice_number} dari PO {$po->po_number} [use_ppn=" . ($usePpn ? 'true' : 'false') . "]"
-            );
-
-        } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error("Gagal auto-generate Invoice untuk PO {$po->po_number}: " . $e->getMessage());
+        // ── 4. Hitung PPN — DPP Nilai Lain ──────────────────────────────
+        // Rumus: DPP  = Subtotal × tax/(tax+1)   → contoh 11%: × 11/12
+        //        PPN  = DPP × tax%
+        //        Total = Subtotal + PPN           ← bukan DPP + PPN
+        if ($usePpn) {
+            $taxPercentage = 11; // TODO: ganti dengan config/setting jika rate berubah
+            $dpp           = round($baseForTax * ($taxPercentage / ($taxPercentage + 1)), 2);
+            $taxAmount     = round($dpp * ($taxPercentage / 100), 2);
+        } else {
+            $taxPercentage = 0;
+            $dpp           = $baseForTax;
+            $taxAmount     = 0;
         }
+
+        // ── 5. Total ─────────────────────────────────────────────────────
+        $totalAmount = round($baseForTax + $taxAmount, 2);
+        $grandTotal  = $totalAmount;
+
+        // ── 6. Generate nomor PI ─────────────────────────────────────────
+        $companyCode = $po->company?->company_code ?? 'XXX';
+        $year        = date('Y');
+        $month       = date('m');
+
+        $last = ProformaInvoice::where('company_id', $po->company_id)
+            ->whereYear('proforma_date', $year)
+            ->whereMonth('proforma_date', $month)
+            ->orderByDesc('proforma_id')
+            ->lockForUpdate()
+            ->first();
+
+        $num            = $last ? ((int) substr($last->proforma_number, -5) + 1) : 1;
+        $proformaNumber = "PI/{$companyCode}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
+
+        // ── 7. Notes ─────────────────────────────────────────────────────
+        $paymentNote = $paymentType === 'dp'
+            ? 'Pembayaran: Down Payment (DP). Invoice akan diterbitkan setelah pelunasan.'
+            : 'Pembayaran: Full Payment.';
+
+        $ppnNote = $usePpn
+            ? " [PPN {$taxPercentage}% - DPP Nilai Lain]"
+            : ' [Non-PPN]';
+
+        // ── 8. Buat Proforma Invoice ─────────────────────────────────────
+        $pi = ProformaInvoice::create([
+            'company_id'          => $po->company_id,
+            'customer_id'         => $po->customer_id,
+            'po_id'               => $po->po_id,
+            'proforma_number'     => $proformaNumber,
+            'proforma_date'       => now()->format('Y-m-d'),
+            'valid_until'         => now()->addDays(30)->format('Y-m-d'),
+            'subtotal'            => $subtotal,          // gross net per item
+            'tax_percentage'      => $taxPercentage,     // 0 jika non-PPN
+            'tax_amount'          => $taxAmount,         // PPN = DPP × tax%
+            'dpp_adjustment'      => $dpp,               // DPP Nilai Lain
+            'discount_amount'     => $discountAmount,    // dari PO
+            'discount_percentage' => $discountPercentage,// dari PO
+            'total_amount'        => $totalAmount,       // base + PPN
+            'grand_total'         => $grandTotal,
+            'use_ppn'             => $usePpn,
+            'payment_terms'       => $paymentType === 'dp'
+                ? 'DP terlebih dahulu, pelunasan menyusul'
+                : 'Full Payment',
+            'delivery_terms'      => 'FOB Destination',
+            'status'              => 'draft',
+            'notes'               => "Auto-generated dari PO {$po->po_number}. {$paymentNote}{$ppnNote}",
+            'created_by'          => Auth::id(),
+        ]);
+
+        // ── 9. Buat Items PI ─────────────────────────────────────────────
+        foreach ($po->items as $poItem) {
+            $itemGross    = (float) $poItem->quantity * (float) $poItem->unit_price;
+            $itemDiscount = $itemGross * ((float) ($poItem->discount_percent ?? 0) / 100);
+            $itemSubtotal = round($itemGross - $itemDiscount, 2);
+
+            ProformaInvoiceItem::create([
+                'proforma_id'         => $pi->proforma_id,
+                'product_id'          => $poItem->product_id,
+                'product_name'        => $poItem->product_name,
+                'product_description' => $poItem->specification ?? null,
+                'product_code'        => $poItem->product?->product_code ?? null,
+                'brand'               => $poItem->product?->brand ?? null,
+                'quantity'            => $poItem->quantity,
+                'unit'                => $poItem->unit,
+                'unit_price'          => $poItem->unit_price,
+                'discount_percent'    => $poItem->discount_percent ?? 0,
+                'subtotal'            => $itemSubtotal, // net per item
+                'notes'               => $poItem->notes ?? null,
+            ]);
+        }
+
+        // ── 10. Log ──────────────────────────────────────────────────────
+        \Illuminate\Support\Facades\Log::info(
+            "Auto-generated PI {$pi->proforma_number} dari PO {$po->po_number} " .
+            "[payment={$paymentType}] " .
+            "[use_ppn=" . ($usePpn ? 'true' : 'false') . "] " .
+            "[subtotal={$subtotal}] " .
+            "[discount={$discountAmount} ({$discountPercentage}%)] " .
+            "[base={$baseForTax}] " .
+            "[dpp={$dpp}] " .
+            "[tax={$taxAmount}] " .
+            "[total={$totalAmount}]"
+        );
+
+        return $pi;
+
+    } catch (\Exception $e) {
+        \Illuminate\Support\Facades\Log::error(
+            "Gagal auto-generate PI untuk PO {$po->po_number}: " . $e->getMessage() .
+            " | Line: " . $e->getLine()
+        );
+        return null;
     }
+}
+
+
+    // private function autoGenerateInvoice(
+    //     PurchaseOrder $po,
+    //     ProformaInvoice $pi,
+    //     bool $usePpn = true   // ✅ TAMBAH parameter
+    // ): void {
+    //     $sudahAda = \App\Models\Invoice::where('po_id', $po->po_id)
+    //         ->orWhere('proforma_invoice_id', $pi->proforma_id)
+    //         ->exists();
+
+    //     if ($sudahAda)
+    //         return;
+
+    //     try {
+    //         $companyCode = $po->company?->company_code ?? 'XXX';
+    //         $year = date('Y');
+    //         $month = date('m');
+    //         $last = \App\Models\Invoice::where('company_id', $po->company_id)
+    //             ->whereYear('invoice_date', $year)
+    //             ->whereMonth('invoice_date', $month)
+    //             ->orderByDesc('invoice_id')
+    //             ->lockForUpdate()
+    //             ->first();
+    //         $num = $last ? ((int) substr($last->invoice_number, -5) + 1) : 1;
+    //         $invoiceNumber = "INV/{$companyCode}/{$year}/{$month}/" . str_pad($num, 5, '0', STR_PAD_LEFT);
+
+    //         $invoice = \App\Models\Invoice::create([
+    //             'company_id' => $po->company_id,
+    //             'customer_id' => $po->customer_id,
+    //             'po_id' => $po->po_id,
+    //             'proforma_invoice_id' => $pi->proforma_id,
+    //             'invoice_number' => $invoiceNumber,
+    //             'invoice_date' => now()->format('Y-m-d'),
+    //             'due_date' => now()->addDays(30)->format('Y-m-d'),
+    //             'subtotal' => $pi->subtotal,
+    //             'tax_percentage' => $pi->tax_percentage,
+    //             'tax_amount' => $pi->tax_amount,
+    //             'discount_amount' => $pi->discount_amount,
+    //             'total_amount' => $pi->total_amount,
+    //             'use_ppn' => $usePpn,   // ✅ SIMPAN
+    //             'payment_status' => 'unpaid',
+    //             'payment_terms' => 'Full Payment',
+    //             'delivery_terms' => 'FOB Destination',
+    //             'currency' => 'IDR',
+    //             'notes' => "Auto-generated dari PO {$po->po_number} (Full Payment)",
+    //             'created_by' => Auth::id(),
+    //         ]);
+
+    //         foreach ($pi->items as $piItem) {
+    //             \App\Models\InvoiceItem::create([
+    //                 'invoice_id' => $invoice->invoice_id,
+    //                 'product_id' => $piItem->product_id,
+    //                 'product_name' => $piItem->product_name,
+    //                 'product_description' => $piItem->product_description,
+    //                 'quantity' => $piItem->quantity,
+    //                 'unit' => $piItem->unit,
+    //                 'unit_price' => $piItem->unit_price,
+    //                 'discount_percent' => $piItem->discount_percent ?? 0, 
+    //                 'notes' => $piItem->notes,
+    //             ]);
+    //         }
+
+    //         $pi->update([
+    //             'status' => 'converted',
+    //             'converted_to_invoice_id' => $invoice->invoice_id,
+    //             'converted_at' => now(),
+    //         ]);
+
+    //         \Illuminate\Support\Facades\Log::info(
+    //             "Auto-generated Invoice {$invoice->invoice_number} dari PO {$po->po_number} [use_ppn=" . ($usePpn ? 'true' : 'false') . "]"
+    //         );
+
+    //     } catch (\Exception $e) {
+    //         \Illuminate\Support\Facades\Log::error("Gagal auto-generate Invoice untuk PO {$po->po_number}: " . $e->getMessage());
+    //     }
+    // }
 
     private function createTenderProject(PurchaseOrder $po): void
     {
@@ -1282,24 +1351,34 @@ class PurchaseOrderController extends BaseController  // ✅ Extend BaseControll
 
     private function resolveProductId(array $item): ?int
     {
+        // ── Sudah ada product_id → langsung pakai
         if (!empty($item['product_id'])) {
             return (int) $item['product_id'];
         }
-
         if (!empty($item['product_name'])) {
+            $productCode = !empty($item['product_code'])
+                ? $item['product_code']
+                : 'PO-' . strtoupper(\Illuminate\Support\Str::random(8));
+            while (Product::where('product_code', $productCode)->exists()) {
+                $productCode = 'PO-' . strtoupper(\Illuminate\Support\Str::random(8));
+            }
+            $productType = $item['product_type'] ?? null;
+            $isPrecursor = in_array($productType, ['prekursor', 'bbo', 'ppi']);
+
             $product = Product::create([
-                'product_code' => !empty($item['product_code'])
-                    ? $item['product_code']
-                    : 'MNL-' . strtoupper(uniqid()),
+                'product_code' => $productCode,
                 'product_name' => $item['product_name'],
-                'brand' => $item['brand'] ?? '-',
+                'product_type' => $productType,
+                'brand' => $item['brand'] ?? 'Unknown',
                 'category' => $item['category'] ?? null,
                 'unit' => $item['unit'] ?? 'pcs',
-                'selling_price' => $item['unit_price'] ?? 0,
+                'selling_price' => (int) ($item['unit_price'] ?? 0),
                 'purchase_price' => 0,
-                'supplier_id' => null,
-                'is_precursor' => false,
+                'supplier_id' => !empty($item['supplier_id']) ? (int) $item['supplier_id'] : null,
+                'is_precursor' => $isPrecursor,
+                'description' => 'Auto-created from Purchase Order (manual input)',
             ]);
+
             return $product->product_id;
         }
 

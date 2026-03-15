@@ -113,51 +113,56 @@ class ProformaInvoicePDFController extends Controller
         }
 
         // Items
-        $items = DB::table('proforma_invoice_items as pii')
-            ->leftJoin('products as p', 'p.product_id', '=', 'pii.product_id')
-            ->select(
-                'pii.item_id',
-                'pii.product_name',
-                'pii.product_description',
-                'pii.quantity',
-                'pii.unit',
-                'pii.unit_price',
-                'pii.subtotal',
-                'p.product_code',   // ✅ ambil dari tabel products
-                'p.brand'           // ✅ ambil dari tabel products
-            )
-            ->where('pii.proforma_id', $id)
-            ->orderBy('pii.item_id')
-            ->get();
+   // Di buildProformaData(), bagian query items — TAMBAH pii.discount_percent
+$items = DB::table('proforma_invoice_items as pii')
+    ->leftJoin('products as p', 'p.product_id', '=', 'pii.product_id')
+    ->select(
+        'pii.item_id',
+        'pii.product_name',
+        'pii.product_description',
+        'pii.quantity',
+        'pii.unit',
+        'pii.unit_price',
+        'pii.subtotal',
+        'pii.discount_percent', // ✅ TAMBAH INI
+        'p.product_code',
+        'p.brand'
+    )
+    ->where('pii.proforma_id', $id)
+    ->orderBy('pii.item_id')
+    ->get();
 
-        // Kalkulasi
-        $subtotal = (float) $proforma->subtotal;
-        $dpp_lainnya = $subtotal * (11 / 12);
-        $ppn = (float) $proforma->tax_amount;
-        $total = (float) $proforma->total_amount;
+// Setelah query items, tambah flag apakah ada diskon per item
+$hasItemDiscount = $items->contains(fn($i) => (float)($i->discount_percent ?? 0) > 0); // ✅ TAMBAH
 
-        // ✅ Terbilang dari total_amount secara dinamis
-        $terbilang = $this->formatTerbilang($total);
+// Kalkulasi (yang sudah ada)
+$subtotal     = (float) $proforma->subtotal;
+$dpp_lainnya  = $subtotal * (11 / 12);
+$ppn          = (float) $proforma->tax_amount;
+$total        = (float) $proforma->total_amount;
+$terbilang    = $this->formatTerbilang($total);
 
-        return compact(
-            'proforma',
-            'items',
-            'company',
-            'subtotal',
-            'dpp_lainnya',
-            'ppn',
-            'total',
-            'terbilang'   // ✅ sudah masuk ke view
-        );
+$terms = DB::table('document_terms')
+    ->where('company_id', $proforma->company_id)
+    ->where('document_type', 'proforma_invoice')
+    ->where('is_active', true)
+    ->orderBy('sort_order')
+    ->get();
+
+return compact(
+    'proforma',
+    'items',
+    'company',
+    'subtotal',
+    'dpp_lainnya',
+    'ppn',
+    'total',
+    'terbilang',
+    'terms',
+    'hasItemDiscount' // ✅ TAMBAH
+);
     }
 
-    /* =========================
-     * STREAM / PREVIEW
-     * ========================= */
-
-    /* =========================
-     * TERBILANG (Bahasa Indonesia)
-     * ========================= */
     /* =========================
      * TERBILANG CORE (rekursif)
      * ========================= */
@@ -209,17 +214,14 @@ class ProformaInvoicePDFController extends Controller
      * ========================= */
     private function formatTerbilang(float $amount): string
     {
-        // Pisah rupiah dan sen
         $rounded = round($amount, 2);
         $rupiah = (int) floor($rounded);
         $sen = (int) round(($rounded - $rupiah) * 100);
 
-        // Bagian Rupiah
         $result = trim($this->terbilang($rupiah));
-        $result = preg_replace('/\s+/', ' ', $result); // hapus double space
+        $result = preg_replace('/\s+/', ' ', $result);
         $result = trim($result) . ' Rupiah';
 
-        // Bagian Sen (jika ada)
         if ($sen > 0) {
             $senStr = trim($this->terbilang($sen));
             $senStr = preg_replace('/\s+/', ' ', $senStr);
@@ -228,7 +230,6 @@ class ProformaInvoicePDFController extends Controller
 
         return $result;
     }
-
 
     public function generate($id)
     {
@@ -243,11 +244,11 @@ class ProformaInvoicePDFController extends Controller
 
             $pdf = Pdf::loadView('pdf.proforma-invoice', $data)
                 ->setPaper('A4', 'portrait')
-                ->setOption('isHtml5ParserEnabled', false) // ✅ Matikan, lebih cepat
-                ->setOption('isRemoteEnabled', false)      // ✅ MATIKAN — ini penyebab utama lambat
-                ->setOption('enable_php', false)           // ✅ Tidak perlu
-                ->setOption('dpi', 96)                     // ✅ Default 96 cukup untuk PDF
-                ->setOption('defaultFont', 'Arial');       // ✅ Paksa font bawaan
+                ->setOption('isHtml5ParserEnabled', false)
+                ->setOption('isRemoteEnabled', false)
+                ->setOption('enable_php', false)
+                ->setOption('dpi', 96)
+                ->setOption('defaultFont', 'Arial');
 
             return $pdf->stream("Proforma_Invoice_{$filename}.pdf");
 
@@ -290,5 +291,4 @@ class ProformaInvoicePDFController extends Controller
             ], 500);
         }
     }
-
 }

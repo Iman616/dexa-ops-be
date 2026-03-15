@@ -11,23 +11,16 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
     /* ==========================================================
      * HELPER PRIVATE
-     *
-     * ✅ KEPUTUSAN ARSITEKTUR:
-     *   pivot `user_companies` → hanya untuk mencatat default/history
-     *   BUKAN untuk membatasi akses company.
-     *
-     *   Filtering data per company sudah terjadi di setiap endpoint
-     *   masing-masing (via company_id dari user_sessions).
-     *   Tidak perlu double-restriction di sini.
      * ========================================================== */
     private function getActiveCompanies(): \Illuminate\Support\Collection
     {
-        // Semua role mendapat daftar yang sama: semua company aktif
         return Company::where('is_active', true)
             ->orderBy('company_code')
             ->get(['company_id', 'company_code', 'company_name']);
@@ -42,6 +35,14 @@ class AuthController extends Controller
         ])->values();
     }
 
+    /**
+     * Buat throttle key unik per username + IP
+     */
+    private function throttleKey(Request $request): string
+    {
+        return Str::lower($request->input('username')) . '|' . $request->ip();
+    }
+
     /* ==========================================================
      * POST /api/auth/register
      * ========================================================== */
@@ -50,15 +51,41 @@ class AuthController extends Controller
         $validator = Validator::make($request->all(), [
             'full_name' => 'required|string|max:255',
             'email'     => 'required|string|email|max:255|unique:users,email',
-            'username'  => 'required|string|max:100|unique:users,username',
-            'password'  => 'required|string|min:8|confirmed',
-            'phone'     => 'nullable|string|max:50',
+            'username'  => [
+                'required',
+                'string',
+                'max:100',
+                'unique:users,username',
+                'regex:/^[a-zA-Z0-9_]+$/', // hanya huruf, angka, underscore
+            ],
+            'password'  => [
+                'required',
+                'string',
+                'min:8',
+                'confirmed',
+                'regex:/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/', // minimal 1 huruf kecil, besar, angka
+            ],
+            'phone'     => 'nullable|string|max:50|regex:/^[0-9\+\-\s]+$/',
+        ], [
+            // ✅ Custom messages — lebih informatif untuk frontend
+            'full_name.required'  => 'Nama lengkap wajib diisi.',
+            'email.required'      => 'Email wajib diisi.',
+            'email.email'         => 'Format email tidak valid.',
+            'email.unique'        => 'Email sudah terdaftar. Gunakan email lain.',
+            'username.required'   => 'Username wajib diisi.',
+            'username.unique'     => 'Username sudah digunakan. Pilih username lain.',
+            'username.regex'      => 'Username hanya boleh mengandung huruf, angka, dan underscore.',
+            'password.required'   => 'Password wajib diisi.',
+            'password.min'        => 'Password minimal 8 karakter.',
+            'password.confirmed'  => 'Konfirmasi password tidak cocok.',
+            'password.regex'      => 'Password harus mengandung minimal 1 huruf besar, 1 huruf kecil, dan 1 angka.',
+            'phone.regex'         => 'Format nomor telepon tidak valid.',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Validation error',
+                'message' => 'Validasi gagal. Periksa kembali data yang dimasukkan.',
                 'errors'  => $validator->errors()
             ], 422);
         }
@@ -70,11 +97,10 @@ class AuthController extends Controller
                 'username'  => $request->username,
                 'password'  => Hash::make($request->password),
                 'phone'     => $request->phone,
-                'role_id'   => 3, // Default: Sales/Marketing
+                'role_id'   => 3,
                 'is_active' => true,
             ]);
 
-            // Auto-set default company untuk user baru
             $defaultCompany = Company::where('is_active', true)->where('is_default', true)->first()
                            ?? Company::where('is_active', true)->orderBy('company_id')->first();
 
@@ -93,7 +119,7 @@ class AuthController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'User registered successfully',
+                'message' => 'Registrasi berhasil.',
                 'data'    => [
                     'user' => [
                         'user_id'   => $user->user_id,
@@ -108,61 +134,100 @@ class AuthController extends Controller
             Log::error('Registration error: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Registration failed',
-                'error'   => $e->getMessage()
+                'message' => 'Registrasi gagal. Silakan coba lagi.',
+                'error'   => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
     }
 
     /* ==========================================================
      * POST /api/auth/login
-     *
-     * BUG SEBELUMNYA:
-     *   Non-SA → $companies = $user->companies()->where(is_active)...
-     *   Jika user hanya punya 1 row di pivot user_companies (misal
-     *   company_id=3), maka dropdown hanya tampil 1 company.
-     *   User tidak bisa pilih company lain meskipun company itu aktif.
-     *
-     * FIX:
-     *   Semua user mendapat daftar SEMUA company aktif.
-     *   Pivot user_companies hanya untuk menentukan default company.
      * ========================================================== */
     public function login(Request $request)
     {
+        // ✅ VALIDASI 1 — Field wajib
         $validator = Validator::make($request->all(), [
             'username' => 'required|string',
             'password' => 'required|string',
+        ], [
+            'username.required' => 'Username atau email wajib diisi.',
+            'password.required' => 'Password wajib diisi.',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Validation error',
+                'message' => 'Validasi gagal.',
                 'errors'  => $validator->errors()
             ], 422);
         }
 
+        // ✅ VALIDASI 2 — Rate limiting: maks 5 percobaan dalam 60 detik
+        $throttleKey = $this->throttleKey($request);
+
+        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+            return response()->json([
+                'success' => false,
+                'message' => "Terlalu banyak percobaan login. Coba lagi dalam {$seconds} detik.",
+                'retry_after_seconds' => $seconds,
+            ], 429);
+        }
+
         try {
+            // ✅ VALIDASI 3 — Cek user exist
             $user = User::where('username', $request->username)
                         ->orWhere('email', $request->username)
                         ->with(['role.permissions.menu', 'companies', 'defaultCompany'])
                         ->first();
 
-            if (!$user || !Hash::check($request->password, $user->password)) {
+            if (!$user) {
+                RateLimiter::hit($throttleKey, 60);
                 return response()->json([
                     'success' => false,
-                    'message' => 'Invalid credentials'
+                    'message' => 'Username atau email tidak ditemukan.',
+                    'errors'  => ['username' => ['Username atau email tidak terdaftar.']]
                 ], 401);
             }
 
+            // ✅ VALIDASI 4 — Cek password
+            if (!Hash::check($request->password, $user->password)) {
+                RateLimiter::hit($throttleKey, 60);
+
+                // Hitung sisa percobaan
+                $attempts   = RateLimiter::attempts($throttleKey);
+                $remaining  = max(0, 5 - $attempts);
+
+                // Log gagal login
+                ActivityLog::create([
+                    'user_id'     => $user->user_id,
+                    'action'      => 'login_failed',
+                    'module'      => 'auth',
+                    'description' => "Login gagal (password salah) untuk: {$user->username}",
+                    'ip_address'  => $request->ip()
+                ]);
+
+                return response()->json([
+                    'success'            => false,
+                    'message'            => 'Password yang Anda masukkan salah.',
+                    'remaining_attempts' => $remaining,
+                    'errors'             => ['password' => ['Password salah.']]
+                ], 401);
+            }
+
+            // ✅ VALIDASI 5 — Cek status akun
             if (!$user->is_active) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Account is inactive'
+                    'message' => 'Akun Anda dinonaktifkan. Hubungi administrator.',
+                    'errors'  => ['account' => ['Akun tidak aktif.']]
                 ], 403);
             }
 
-            // ✅ FIX #1 — Semua user dapat semua company aktif
+            // ✅ Login berhasil — reset rate limiter
+            RateLimiter::clear($throttleKey);
+
+            // ✅ VALIDASI 6 — Cek company aktif
             $companies = $this->getActiveCompanies();
 
             if ($companies->isEmpty()) {
@@ -172,15 +237,11 @@ class AuthController extends Controller
                 ], 403);
             }
 
-            // Tentukan selected company:
-            // 1. Pakai default_company_id user jika ada & masih aktif
-            // 2. Fallback ke company pertama yang aktif
+            // Tentukan selected company
             $selectedCompany = null;
-
             if ($user->default_company_id) {
                 $selectedCompany = $companies->firstWhere('company_id', $user->default_company_id);
             }
-
             if (!$selectedCompany) {
                 $selectedCompany = $companies->first();
                 $user->update(['default_company_id' => $selectedCompany->company_id]);
@@ -216,7 +277,7 @@ class AuthController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Login successful',
+                'message' => 'Login berhasil.',
                 'data'    => [
                     'user' => [
                         'user_id'      => $user->user_id,
@@ -246,7 +307,7 @@ class AuthController extends Controller
             Log::error('Login error: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
             return response()->json([
                 'success' => false,
-                'message' => 'Login failed',
+                'message' => 'Login gagal. Silakan coba lagi.',
                 'error'   => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
@@ -254,31 +315,21 @@ class AuthController extends Controller
 
     /* ==========================================================
      * POST /api/auth/switch-company
-     *
-     * BUG SEBELUMNYA:
-     *   if ($user->role_id !== 1 && !$user->hasAccessToCompany($companyId))
-     *       → return 403
-     *
-     *   hasAccessToCompany() mengecek pivot user_companies.
-     *   Non-SA yang hanya punya 1 company di pivot → selalu 403
-     *   saat coba switch ke company lain.
-     *
-     * FIX:
-     *   Hapus pengecekan hasAccessToCompany().
-     *   Validasi cukup: company harus ada dan is_active=true.
-     *   Data tetap aman karena setiap endpoint filter by company_id
-     *   dari session — user hanya lihat data company yang sedang aktif.
      * ========================================================== */
     public function switchCompany(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'company_id' => 'required|exists:companies,company_id',
+            'company_id' => 'required|integer|exists:companies,company_id',
+        ], [
+            'company_id.required' => 'company_id wajib diisi.',
+            'company_id.integer'  => 'company_id harus berupa angka.',
+            'company_id.exists'   => 'Company tidak ditemukan.',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Validation error',
+                'message' => 'Validasi gagal.',
                 'errors'  => $validator->errors()
             ], 422);
         }
@@ -287,8 +338,7 @@ class AuthController extends Controller
             $user      = $request->user();
             $companyId = (int) $request->company_id;
 
-            // ✅ FIX #2 — Validasi cukup: company harus aktif
-            // DIHAPUS: if ($user->role_id !== 1 && !$user->hasAccessToCompany($companyId)) → 403
+            // ✅ Pastikan company aktif
             $company = Company::where('company_id', $companyId)
                                ->where('is_active', true)
                                ->first();
@@ -296,20 +346,31 @@ class AuthController extends Controller
             if (!$company) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Company tidak ditemukan atau tidak aktif.'
+                    'message' => 'Company tidak ditemukan atau tidak aktif.',
+                    'errors'  => ['company_id' => ['Company tidak aktif.']]
                 ], 404);
             }
 
-            // Update default company user & session
+            // ✅ Cegah switch ke company yang sama
+            $token   = $request->bearerToken();
+            $session = UserSession::where('session_token', $token)
+                                  ->where('user_id', $user->user_id)
+                                  ->where('is_active', true)
+                                  ->first();
+
+            if ($session && $session->selected_company_id === $companyId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => "Anda sudah berada di company {$company->company_name}.",
+                ], 422);
+            }
+
             $user->update(['default_company_id' => $companyId]);
 
-            // Catat di pivot sebagai audit trail (tidak membatasi akses)
             $user->companies()->syncWithoutDetaching([
                 $companyId => ['is_default' => 1]
             ]);
 
-            // Update session aktif dengan company baru
-            $token = $request->bearerToken();
             UserSession::where('session_token', $token)
                        ->where('user_id', $user->user_id)
                        ->update(['selected_company_id' => $companyId]);
@@ -322,15 +383,9 @@ class AuthController extends Controller
                 'ip_address'  => $request->ip()
             ]);
 
-            Log::info('Company switched', [
-                'user_id'    => $user->user_id,
-                'username'   => $user->username,
-                'company_id' => $companyId,
-            ]);
-
             return response()->json([
                 'success' => true,
-                'message' => "Berhasil beralih ke {$company->company_name}",
+                'message' => "Berhasil beralih ke {$company->company_name}.",
                 'data'    => [
                     'selected_company' => [
                         'company_id'   => $company->company_id,
@@ -345,7 +400,7 @@ class AuthController extends Controller
             Log::error('Switch company error: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to switch company',
+                'message' => 'Gagal berpindah company.',
                 'error'   => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
@@ -353,27 +408,30 @@ class AuthController extends Controller
 
     /* ==========================================================
      * GET /api/auth/me
-     *
-     * BUG SEBELUMNYA:
-     *   Non-SA → $companies = $user->companies()->where(is_active)...
-     *   Sama seperti login — hanya pivot, bukan semua company aktif.
-     *   Setelah login + switch company, /me masih return list lama
-     *   sehingga frontend tidak tahu company lain tersedia.
-     *
-     * FIX:
-     *   Return semua company aktif + resolve selected_company
-     *   dari session (bukan dari default_company_id saja).
      * ========================================================== */
     public function me(Request $request)
     {
         try {
-            $user = $request->user()->load(['role.permissions.menu', 'companies', 'defaultCompany']);
+            $user = $request->user();
 
-            // ✅ FIX #3 — Semua user dapat semua company aktif
+            // ✅ Guard: pastikan token valid dan user masih aktif
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Token tidak valid atau sudah kedaluwarsa.',
+                ], 401);
+            }
+
+            if (!$user->is_active) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Akun Anda dinonaktifkan. Hubungi administrator.',
+                ], 403);
+            }
+
+            $user->load(['role.permissions.menu', 'companies', 'defaultCompany']);
             $companies = $this->getActiveCompanies();
 
-            // Resolve selected company dari session yang sedang aktif
-            // (bukan dari default_company_id, agar konsisten dengan switchCompany)
             $token   = $request->bearerToken();
             $session = \Illuminate\Support\Facades\DB::table('user_sessions')
                 ->where('session_token', $token)
@@ -382,11 +440,9 @@ class AuthController extends Controller
                 ->orderByDesc('login_at')
                 ->first();
 
-            $selectedCompanyId = $session?->selected_company_id
-                              ?? $user->default_company_id;
-
-            $selectedCompany = $companies->firstWhere('company_id', $selectedCompanyId)
-                            ?? $companies->first();
+            $selectedCompanyId = $session?->selected_company_id ?? $user->default_company_id;
+            $selectedCompany   = $companies->firstWhere('company_id', $selectedCompanyId)
+                              ?? $companies->first();
 
             return response()->json([
                 'success' => true,
@@ -418,7 +474,7 @@ class AuthController extends Controller
             Log::error('Get user info error: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to get user info',
+                'message' => 'Gagal mengambil data user.',
                 'error'   => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }
@@ -431,6 +487,13 @@ class AuthController extends Controller
     {
         try {
             $user = $request->user();
+
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Token tidak valid atau sudah kedaluwarsa.',
+                ], 401);
+            }
 
             UserSession::where('user_id', $user->user_id)
                        ->where('is_active', true)
@@ -451,14 +514,14 @@ class AuthController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Logout successful'
+                'message' => 'Logout berhasil.'
             ], 200);
 
         } catch (\Exception $e) {
             Log::error('Logout error: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Logout failed',
+                'message' => 'Logout gagal.',
                 'error'   => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
         }

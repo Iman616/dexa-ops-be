@@ -93,28 +93,33 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
 
-    // ==================== PRODUCTS ====================
-    Route::prefix('products')->group(function () {
-        // List & CRUD
-        Route::get('/', [ProductController::class, 'index']);
-        Route::post('/', [ProductController::class, 'store']);
-        Route::get('/{id}', [ProductController::class, 'show']);
-        Route::put('/{id}', [ProductController::class, 'update']);
-        Route::delete('/{id}', [ProductController::class, 'destroy']);
+   // ==================== PRODUCTS ====================
+Route::prefix('products')->group(function () {
 
-        Route::get('/{productId}/suppliers', [SupplierPurchaseOrderController::class, 'suppliersForProduct']);
-        Route::post('/{productId}/suppliers', [SupplierPurchaseOrderController::class, 'assignSupplierToProduct']);
+    // ✅ 1. Static routes HARUS di atas /{id}
+    Route::get('/options/categories',    [ProductController::class, 'categories']);
+    Route::get('/options/brands',        [ProductController::class, 'brands']);
+    Route::get('/options/product-types', [ProductController::class, 'productTypes']);
 
-        // Dropdown options
-        Route::get('/options/categories', [ProductController::class, 'categories']);
-        Route::get('/options/brands', [ProductController::class, 'brands']);
-        Route::get('/options/product-types', [ProductController::class, 'productTypes']);
+    // ✅ 2. Export & Import — juga harus di atas /{id}
+    Route::get('/export',          [ProductController::class, 'export']);
+    Route::post('/import',         [ProductController::class, 'import']);
+    Route::get('/import/template', [ProductController::class, 'downloadTemplate']);
 
-        // Import/Export
-        Route::post('/import', [ProductController::class, 'import']);
-        Route::get('/export', [ProductController::class, 'export']);
-        Route::get('/import/template', [ProductController::class, 'downloadTemplate']);
-    });
+    // ✅ 3. List & CRUD tanpa parameter
+    Route::get('/',  [ProductController::class, 'index']);
+    Route::post('/', [ProductController::class, 'store']);
+
+    // ✅ 4. Wildcard /{id} — HARUS paling bawah
+    Route::get('/{id}',    [ProductController::class, 'show']);
+    Route::put('/{id}',    [ProductController::class, 'update']);
+    Route::delete('/{id}', [ProductController::class, 'destroy']);
+
+    // ✅ 5. Nested routes dengan /{id}/...
+    Route::get('/{productId}/suppliers',  [SupplierPurchaseOrderController::class, 'suppliersForProduct']);
+    Route::post('/{productId}/suppliers', [SupplierPurchaseOrderController::class, 'assignSupplierToProduct']);
+});
+
     // ==================== CUSTOMERS ====================
     Route::prefix('customers')->group(function () {
         Route::get('/', [CustomerController::class, 'index']);
@@ -393,7 +398,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // ── Actions ───────────────────────────────────────────────────────────
         Route::post('/{id}/issue', [PurchaseOrderController::class, 'issue']);
         Route::patch('/{id}/status', [PurchaseOrderController::class, 'updateStatus']);
-        Route::post('/{id}/process', [PurchaseOrderController::class, 'process']); 
+        Route::post('/{id}/process', [PurchaseOrderController::class, 'process']);
 
         // ── File ──────────────────────────────────────────────────────────────
         Route::get('/{id}/pdf', [PurchaseOrderController::class, 'generatePdf']);
@@ -687,6 +692,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/{id}', [StockOpnameController::class, 'destroy']);
         Route::post('/{id}/complete', [StockOpnameController::class, 'complete']);
         Route::post('/{id}/approve', [StockOpnameController::class, 'approve']);
+        Route::put('/{id}/items-batch', [StockOpnameController::class, 'updateItemsBatch']);
         Route::put('/{opnameId}/items/{itemId}', [StockOpnameController::class, 'updateItem']);
     });
 
@@ -769,6 +775,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // ==================== STOCK OPENING ====================
     Route::prefix('stock-opening')->group(function () {
         Route::get('/', [StockOpeningController::class, 'index']);
+          Route::get('/export',    [StockOpeningController::class, 'export']);
+             Route::get('/template',  [StockOpeningController::class, 'downloadTemplate']);
+    Route::post('/import',   [StockOpeningController::class, 'import']);
         Route::post('/', [StockOpeningController::class, 'store']);
         Route::post('/bulk', [StockOpeningController::class, 'bulkStore']);
         Route::post('/import', [StockOpeningController::class, 'importFromExcel']);

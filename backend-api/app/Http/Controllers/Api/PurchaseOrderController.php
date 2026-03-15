@@ -1115,7 +1115,6 @@ class PurchaseOrderController extends BaseController
             'discount_amount'     => $discountAmount,    // dari PO
             'discount_percentage' => $discountPercentage,// dari PO
             'total_amount'        => $totalAmount,       // base + PPN
-            'grand_total'         => $grandTotal,
             'use_ppn'             => $usePpn,
             'payment_terms'       => $paymentType === 'dp'
                 ? 'DP terlebih dahulu, pelunasan menyusul'
@@ -1229,7 +1228,7 @@ class PurchaseOrderController extends BaseController
     //                 'quantity' => $piItem->quantity,
     //                 'unit' => $piItem->unit,
     //                 'unit_price' => $piItem->unit_price,
-    //                 'discount_percent' => $piItem->discount_percent ?? 0, 
+    //                 'discount_percent' => $piItem->discount_percent ?? 0,
     //                 'notes' => $piItem->notes,
     //             ]);
     //         }

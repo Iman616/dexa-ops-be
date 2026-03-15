@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use App\Models\EndingStock;
+use App\Models\StockBatch;
 
 class StockReturn extends Model
 {
@@ -241,18 +243,18 @@ class StockReturn extends Model
     {
         $prefix = $returnType === 'customer_return' ? 'RET-C' : 'RET-S';
         $yearMonth = now()->format('Ym');
-        
+
         $lastReturn = self::where('return_number', 'LIKE', "{$prefix}-{$companyCode}-{$yearMonth}-%")
             ->orderBy('return_number', 'desc')
             ->first();
-        
+
         if ($lastReturn) {
             $lastNumber = (int) substr($lastReturn->return_number, -4);
             $newNumber = str_pad($lastNumber + 1, 4, '0', STR_PAD_LEFT);
         } else {
             $newNumber = '0001';
         }
-        
+
         return "{$prefix}-{$companyCode}-{$yearMonth}-{$newNumber}";
     }
 
@@ -268,7 +270,7 @@ class StockReturn extends Model
         }
 
         $this->update(['status' => 'pending']);
-        
+
         return $this;
     }
 
@@ -349,77 +351,86 @@ class StockReturn extends Model
     /**
      * Process customer return - add stock back
      */
-    protected function processCustomerReturn()
-    {
-        // Create STOCK IN untuk return dari customer
-        $stockIn = StockIn::create([
-            'company_id' => $this->company_id,
-            'product_id' => $this->product_id,
-            'batch_id' => $this->batch_id,
-            'quantity' => $this->quantity,
-            'purchase_price' => $this->return_value / $this->quantity, // Average value
-            'received_date' => $this->return_date,
-            'notes' => "Customer Return: {$this->return_number} - {$this->return_notes}",
-            'received_by' => Auth::id(),
-            'receiver_name' => $this->signed_by,
-            'received_datetime' => now(),
-        ]);
-
-        // Update batch quantity_available
-        if ($this->batch) {
-            $this->batch->increment('quantity_available', $this->quantity);
-        }
-
-        // Create stock movement
-        StockMovement::create([
-            'product_id' => $this->product_id,
-            'batch_id' => $this->batch_id,
-            'movement_type' => 'RETURN_IN',
-            'quantity' => $this->quantity,
-            'unit_cost' => $this->return_value / $this->quantity,
-            'reference_id' => $this->return_id,
-            'reference_type' => 'stock_return',
-            'notes' => "Customer return: {$this->return_number}",
-            'created_by' => Auth::id(),
-        ]);
-    }
 
     /**
      * Process supplier return - reduce stock
      */
-    protected function processSupplierReturn()
-    {
-        // Create STOCK OUT untuk return ke supplier
-        $stockOut = StockOut::create([
-            'company_id' => $this->company_id,
-            'product_id' => $this->product_id,
-            'batch_id' => $this->batch_id,
-            'quantity' => $this->quantity,
-            'selling_price' => 0, // Return tidak ada selling price
-            'out_date' => $this->return_date,
-            'transaction_type' => 'return_supplier',
-            'notes' => "Supplier Return: {$this->return_number} - {$this->return_notes}",
-            'processed_by' => Auth::id(),
-        ]);
+protected function processSupplierReturn()
+{
+    if (!$this->batch_id) {
+        throw new \Exception(
+            "Batch wajib diisi sebelum proses return supplier."
+        );
+    }
 
-        // Update batch quantity_available
-        if ($this->batch) {
-            $this->batch->decrement('quantity_available', $this->quantity);
-        }
+    $batch    = StockBatch::find($this->batch_id);
+    $unitCost = (float) ($batch?->purchase_price ?? 0);
 
-        // Create stock movement
-        StockMovement::create([
-            'product_id' => $this->product_id,
-            'batch_id' => $this->batch_id,
-            'movement_type' => 'RETURN_OUT',
-            'quantity' => $this->quantity,
-            'unit_cost' => $this->return_value / $this->quantity,
-            'reference_id' => $this->return_id,
-            'reference_type' => 'stock_return',
-            'notes' => "Supplier return: {$this->return_number}",
-            'created_by' => Auth::id(),
+    // ✅ Langsung adjust batch — TIDAK buat StockOut
+    // StockOut dari proses return bisa trigger movement duplikat
+    if ($batch) {
+        $newQty = max(0, $batch->quantity_available - (float) $this->quantity);
+        $batch->update([
+            'quantity_available' => $newQty,
+            'status'             => $newQty <= 0 ? 'depleted' : 'active',
         ]);
     }
+
+    // ✅ Satu movement saja — reference ke stock_return bukan stock_out
+    StockMovement::create([
+        'product_id'     => $this->product_id,
+        'batch_id'       => $this->batch_id,
+        'movement_type'  => 'RETURN_OUT',
+        'quantity'       => (string) $this->quantity,
+        'unit_cost'      => (string) $unitCost,
+        'reference_id'   => $this->return_id,
+        'reference_type' => 'stock_return',
+        'notes'          => "Supplier return: {$this->return_number}",
+        'created_by'     => Auth::id(),
+        'movement_date'  => now()->toDateTimeString(),
+    ]);
+
+    $date = \Carbon\Carbon::parse($this->return_date);
+    EndingStock::updateEndingStock($this->batch_id, $date->year, $date->month);
+}
+
+protected function processCustomerReturn()
+{
+    if (!$this->batch_id) {
+        throw new \Exception(
+            "Batch wajib diisi sebelum proses return customer."
+        );
+    }
+
+    $batch    = StockBatch::find($this->batch_id);
+    $unitCost = (float) ($batch?->purchase_price ?? 0);
+
+    // ✅ Langsung adjust batch — TIDAK buat StockIn
+    if ($batch) {
+        $newQty = $batch->quantity_available + (float) $this->quantity;
+        $batch->update([
+            'quantity_available' => $newQty,
+            'status'             => 'active',
+        ]);
+    }
+
+    // ✅ Satu movement saja
+    StockMovement::create([
+        'product_id'     => $this->product_id,
+        'batch_id'       => $this->batch_id,
+        'movement_type'  => 'RETURN_IN',
+        'quantity'       => (string) $this->quantity,
+        'unit_cost'      => (string) $unitCost,
+        'reference_id'   => $this->return_id,
+        'reference_type' => 'stock_return',
+        'notes'          => "Customer return: {$this->return_number}",
+        'created_by'     => Auth::id(),
+        'movement_date'  => now()->toDateTimeString(),
+    ]);
+
+    $date = \Carbon\Carbon::parse($this->return_date);
+    EndingStock::updateEndingStock($this->batch_id, $date->year, $date->month);
+}
 
     /**
      * Cancel return

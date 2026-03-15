@@ -31,7 +31,7 @@ class StockOutController extends Controller
         $query = StockOut::with([
             'company:company_id,company_name,company_code',
             'product:product_id,product_code,product_name,category,unit,selling_price',
-            'batch:batch_id,batch_number,product_id,expiry_date',
+            'batch:batch_id,batch_number,product_id,expiry_date,purchase_price',
             'customer:customer_id,customer_name,contact_person,phone',
             'processedBy:user_id,username,full_name,email,role_id',
             'deliveryNote:delivery_note_id,delivery_note_number,recipient_name,status',

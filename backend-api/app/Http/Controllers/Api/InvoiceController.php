@@ -23,97 +23,97 @@ class InvoiceController extends BaseController  // ✅ extends BaseController
     /**
      * Display a listing of invoices
      */
- public function index(Request $request)
-{
-    try {
-        $companyId = $this->getCompanyId($request);
+    public function index(Request $request)
+    {
+        try {
+            $companyId = $this->getCompanyId($request);
 
-      $query = Invoice::with([
-    'company:company_id,company_name,company_code',
-    'customer:customer_id,customer_name,address,phone,email',
+            $query = Invoice::with([
+                'company:company_id,company_name,company_code',
+                'customer:customer_id,customer_name,address,phone,email',
 
-    // ✅ Load PO + activityType sekaligus
-    'purchase_order' => function ($q) {
-        $q->select('po_id', 'po_number', 'activity_type_id')
-          ->with('activityType:activity_type_id,type_name');
-    },
+                // ✅ Load PO + activityType sekaligus
+                'purchase_order' => function ($q) {
+                    $q->select('po_id', 'po_number', 'activity_type_id')
+                        ->with('activityType:activity_type_id,type_name');
+                },
 
-    'proforma_invoice:proforma_id,proforma_number',
-    'items',
+                'proforma_invoice:proforma_id,proforma_number',
+                'items',
 
-    'payments' => function ($q) {
-        $q->latest()->limit(1);
-    },
-    'delivery_notes' => function ($q) {
-        $q->latest('delivery_date')->limit(1);
-    },
-    'created_by_user:user_id,full_name',
-])
-->where('company_id', $companyId);
+                'payments' => function ($q) {
+                    $q->latest()->limit(1);
+                },
+                'delivery_notes' => function ($q) {
+                    $q->latest('delivery_date')->limit(1);
+                },
+                'created_by_user:user_id,full_name',
+            ])
+                ->where('company_id', $companyId);
 
-        // 🔍 Search
-        if ($request->filled('search')) {
-            $query->where(function ($q) use ($request) {
-                $q->where('invoice_number', 'LIKE', "%{$request->search}%")
-                  ->orWhereHas('customer', function ($q2) use ($request) {
-                      $q2->where('customer_name', 'LIKE', "%{$request->search}%");
-                  });
-            });
+            // 🔍 Search
+            if ($request->filled('search')) {
+                $query->where(function ($q) use ($request) {
+                    $q->where('invoice_number', 'LIKE', "%{$request->search}%")
+                        ->orWhereHas('customer', function ($q2) use ($request) {
+                            $q2->where('customer_name', 'LIKE', "%{$request->search}%");
+                        });
+                });
+            }
+
+            // 🎯 Filter Customer
+            if ($request->filled('customer_id')) {
+                $query->where('customer_id', $request->customer_id);
+            }
+
+            // 💰 Filter Payment Status
+            if ($request->filled('payment_status')) {
+                $statuses = explode(',', $request->payment_status);
+                $query->whereIn('payment_status', $statuses);
+            }
+
+            // ⏰ Overdue Filter
+            if ($request->overdue_only === 'true' || $request->overdue_only === true) {
+                $query->where('due_date', '<', now())
+                    ->whereNotIn('payment_status', ['paid', 'completed']);
+            }
+
+            // 📅 Filter Tanggal
+            if ($request->filled('start_date') && $request->filled('end_date')) {
+                $query->whereBetween('invoice_date', [
+                    $request->start_date,
+                    $request->end_date
+                ]);
+            }
+
+            /*
+            ✅ SORTING PALING BARU
+            Kalau ada update item/payment/delivery
+            biasanya invoice ikut update timestamp
+            */
+            $sortBy = $request->sort_by ?? 'updated_at';
+            $sortOrder = $request->sort_order ?? 'desc';
+
+            $query->orderBy($sortBy, $sortOrder);
+
+            $perPage = $request->per_page ?? 15;
+
+            $invoices = $query->paginate($perPage);
+
+            return response()->json([
+                'success' => true,
+                'data' => $invoices
+            ], 200);
+
+        } catch (\Exception $e) {
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch invoices',
+                'error' => $e->getMessage()
+            ], 500);
         }
-
-        // 🎯 Filter Customer
-        if ($request->filled('customer_id')) {
-            $query->where('customer_id', $request->customer_id);
-        }
-
-        // 💰 Filter Payment Status
-        if ($request->filled('payment_status')) {
-            $statuses = explode(',', $request->payment_status);
-            $query->whereIn('payment_status', $statuses);
-        }
-
-        // ⏰ Overdue Filter
-        if ($request->overdue_only === 'true' || $request->overdue_only === true) {
-            $query->where('due_date', '<', now())
-                  ->whereNotIn('payment_status', ['paid', 'completed']);
-        }
-
-        // 📅 Filter Tanggal
-        if ($request->filled('start_date') && $request->filled('end_date')) {
-            $query->whereBetween('invoice_date', [
-                $request->start_date,
-                $request->end_date
-            ]);
-        }
-
-        /*
-        ✅ SORTING PALING BARU
-        Kalau ada update item/payment/delivery
-        biasanya invoice ikut update timestamp
-        */
-        $sortBy = $request->sort_by ?? 'updated_at';
-        $sortOrder = $request->sort_order ?? 'desc';
-
-        $query->orderBy($sortBy, $sortOrder);
-
-        $perPage = $request->per_page ?? 15;
-
-        $invoices = $query->paginate($perPage);
-
-        return response()->json([
-            'success' => true,
-            'data' => $invoices
-        ], 200);
-
-    } catch (\Exception $e) {
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to fetch invoices',
-            'error' => $e->getMessage()
-        ], 500);
     }
-}
 
 
 
@@ -135,6 +135,7 @@ class InvoiceController extends BaseController  // ✅ extends BaseController
             'create_tax_invoice' => 'boolean',
             'tax_invoice_number' => 'nullable|string|max:100',
             'tax_invoice_date' => 'nullable|date',
+            'use_ppn' => 'nullable|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -160,48 +161,51 @@ class InvoiceController extends BaseController  // ✅ extends BaseController
             }
 
             $invoice = Invoice::create([
-                'company_id' => $pi->company_id,
-                'customer_id' => $pi->customer_id,
-                'po_id' => $pi->po_id,
-                'proforma_invoice_id' => $pi->proforma_id,
+                'company_id' => $companyId,
+                'customer_id' => $request->customer_id,
+                'po_id' => $request->po_id,
+                'proforma_invoice_id' => $request->proforma_invoice_id,
                 'invoice_number' => $request->invoice_number,
                 'invoice_date' => $request->invoice_date,
                 'due_date' => $request->due_date,
-                'subtotal' => $pi->subtotal,
-                'tax_percentage' => $pi->tax_percentage,
-                'tax_amount' => $pi->tax_amount,
-                'discount_amount' => $pi->discount_amount,
-                'total_amount' => $pi->total_amount,
-                'currency' => $pi->currency ?? 'IDR',
+                'subtotal' => $request->subtotal,
+                'tax_percentage' => $request->tax_percentage,
+                'tax_amount' => $request->tax_amount,
+                'discount_amount' => $request->discount_amount ?? 0,
+                'total_amount' => $request->total_amount,
+                'currency' => $request->currency ?? 'IDR',
                 'payment_status' => 'unpaid',
-                'payment_terms' => $request->payment_terms ?? $pi->payment_terms,
-                'delivery_terms' => $request->delivery_terms ?? $pi->delivery_terms,
-                'notes' => $pi->notes,
+                'payment_terms' => $request->payment_terms,
+                'delivery_terms' => $request->delivery_terms,
+                'notes' => $request->notes,
                 'created_by' => Auth::id(),
+                // ✅ FIX: Simpan use_ppn dari request, default true
+                'use_ppn' => $request->has('use_ppn') ? $request->boolean('use_ppn') : true,
             ]);
 
-            foreach ($pi->items as $piItem) {
-                InvoiceItem::create([
-                    'invoice_id' => $invoice->invoice_id,
-                    'product_id' => $piItem->product_id,
-                    'product_name' => $piItem->product_name,
-                    'quantity' => $piItem->quantity,
-                    'unit' => $piItem->unit,
-                    'unit_price' => $piItem->unit_price,
-                    'notes' => $piItem->notes,
-                ]);
-            }
-
+          foreach ($pi->items as $piItem) {
+    InvoiceItem::create([
+        'invoice_id'          => $invoice->invoice_id,
+        'product_id'          => $piItem->product_id,
+        'product_name'        => $piItem->product_name,
+        'product_description' => $piItem->product_description ?? null,
+        'quantity'            => $piItem->quantity,
+        'unit'                => $piItem->unit,
+        'unit_price'          => $piItem->unit_price,
+        'discount_percent'    => $piItem->discount_percent ?? 0,
+        'notes'               => $piItem->notes,
+    ]);
+}
             $pi->update([
                 'status' => 'converted',
                 'converted_to_invoice_id' => $invoice->invoice_id,
                 'converted_at' => now(),
             ]);
 
-            $taxInvoice = null;
-            if ($request->boolean('create_tax_invoice', true)) {
-                $taxInvoice = $this->autoCreateTaxInvoice($invoice, $request);
-            }
+           $taxInvoice = null;
+if ($request->boolean('create_tax_invoice', true) && (bool) $invoice->use_ppn) {
+    $taxInvoice = $this->autoCreateTaxInvoice($invoice, $request);
+}
 
             DB::commit();
 
@@ -258,6 +262,7 @@ class InvoiceController extends BaseController  // ✅ extends BaseController
             'create_tax_invoice' => 'boolean',
             'tax_invoice_number' => 'nullable|string|max:100',
             'tax_invoice_date' => 'nullable|date',
+            'use_ppn' => 'nullable|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -297,7 +302,7 @@ class InvoiceController extends BaseController  // ✅ extends BaseController
             }
 
             $invoice = Invoice::create([
-                'company_id' => $companyId, // ✅ dari session
+                'company_id' => $companyId,
                 'customer_id' => $request->customer_id,
                 'po_id' => $request->po_id,
                 'proforma_invoice_id' => $request->proforma_invoice_id,
@@ -315,6 +320,8 @@ class InvoiceController extends BaseController  // ✅ extends BaseController
                 'delivery_terms' => $request->delivery_terms,
                 'notes' => $request->notes,
                 'created_by' => Auth::id(),
+                // ✅ FIX: Simpan use_ppn dari request, default true
+                'use_ppn' => $request->has('use_ppn') ? $request->boolean('use_ppn') : true,
             ]);
 
             foreach ($request->items as $item) {
@@ -330,11 +337,10 @@ class InvoiceController extends BaseController  // ✅ extends BaseController
                 ]);
             }
 
-            $taxInvoice = null;
-            if ($request->boolean('create_tax_invoice', false)) {
-                $taxInvoice = $this->autoCreateTaxInvoice($invoice, $request);
-            }
-
+          $taxInvoice = null;
+if ($request->boolean('create_tax_invoice', true) && (bool) $invoice->use_ppn) {
+    $taxInvoice = $this->autoCreateTaxInvoice($invoice, $request);
+}
             DB::commit();
 
             return response()->json([
@@ -419,44 +425,44 @@ class InvoiceController extends BaseController  // ✅ extends BaseController
     /**
      * Display the specified invoice
      */
- public function show(Request $request, $id)
-{
-    try {
-        $companyId = $this->getCompanyId($request);
+    public function show(Request $request, $id)
+    {
+        try {
+            $companyId = $this->getCompanyId($request);
 
-        $invoice = Invoice::with([
-            'company',
-            'customer',
-            'purchase_order',
-            'proforma_invoice',
-            'items.product',
-            'payments',
-            'delivery_notes',
-            'created_by_user:user_id,full_name',
+            $invoice = Invoice::with([
+                'company',
+                'customer',
+                'purchase_order',
+                'proforma_invoice',
+                'items.product',
+                'payments',
+                'delivery_notes',
+                'created_by_user:user_id,full_name',
 
-            // ✅ TAMBAH: Load semua tax invoices + file bukti
-            'taxInvoices' => function ($q) {
-                $q->with(['createdBy:user_id,full_name', 'approvedBy:user_id,full_name'])
-                  ->orderBy('tax_invoice_date', 'desc');
-            },
-        ])
-        ->where('company_id', $companyId)
-        ->find($id);
+                // ✅ TAMBAH: Load semua tax invoices + file bukti
+                'taxInvoices' => function ($q) {
+                    $q->with(['createdBy:user_id,full_name', 'approvedBy:user_id,full_name'])
+                        ->orderBy('tax_invoice_date', 'desc');
+                },
+            ])
+                ->where('company_id', $companyId)
+                ->find($id);
 
-        if (!$invoice) {
-            return response()->json(['success' => false, 'message' => 'Invoice tidak ditemukan'], 404);
+            if (!$invoice) {
+                return response()->json(['success' => false, 'message' => 'Invoice tidak ditemukan'], 404);
+            }
+
+            // ✅ Compute tax breakdown (sudah via accessor, tapi pastikan payments di-load dulu)
+            $data = $invoice->toArray();
+            $data['tax_breakdown'] = $invoice->tax_breakdown;
+
+            return response()->json(['success' => true, 'data' => $data], 200);
+
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => 'Failed to fetch invoice', 'error' => $e->getMessage()], 500);
         }
-
-        // ✅ Compute tax breakdown (sudah via accessor, tapi pastikan payments di-load dulu)
-        $data = $invoice->toArray();
-        $data['tax_breakdown'] = $invoice->tax_breakdown;
-
-        return response()->json(['success' => true, 'data' => $data], 200);
-
-    } catch (\Exception $e) {
-        return response()->json(['success' => false, 'message' => 'Failed to fetch invoice', 'error' => $e->getMessage()], 500);
     }
-}
 
     /**
      * Update the specified invoice
@@ -605,180 +611,180 @@ class InvoiceController extends BaseController  // ✅ extends BaseController
         ], 200);
     }
 
-public function createDeliveryNote(Request $request, $id)
-{
-    $companyId = $this->getCompanyId($request);
+    public function createDeliveryNote(Request $request, $id)
+    {
+        $companyId = $this->getCompanyId($request);
 
-    // ✅ Load semua relasi yang dibutuhkan termasuk po & quotation
-    $invoice = Invoice::with([
-        'purchaseOrder.customer',
-        'purchaseOrder.quotation',  // ✅ untuk ambil quotation_id
-        'items.product',
-        'customer',
-        'company',
-        'payments',
-    ])
-    ->where('company_id', $companyId)
-    ->find($id);
+        // ✅ Load semua relasi yang dibutuhkan termasuk po & quotation
+        $invoice = Invoice::with([
+            'purchaseOrder.customer',
+            'purchaseOrder.quotation',  // ✅ untuk ambil quotation_id
+            'items.product',
+            'customer',
+            'company',
+            'payments',
+        ])
+            ->where('company_id', $companyId)
+            ->find($id);
 
-    if (!$invoice) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Invoice not found'
-        ], 404);
-    }
-
-    if ($invoice->payment_status === 'unpaid') {
-        return response()->json([
-            'success' => false,
-            'message' => 'Invoice belum dibayar, tidak bisa membuat surat jalan'
-        ], 422);
-    }
-
-    if ($invoice->items->isEmpty()) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Invoice tidak memiliki item, tidak dapat membuat surat jalan'
-        ], 422);
-    }
-
-    $validator = Validator::make($request->all(), [
-        'delivery_date'     => 'required|date',
-        'recipient_name'    => 'nullable|string|max:255',
-        'recipient_address' => 'required|string',
-        'notes'             => 'nullable|string',
-    ]);
-
-    if ($validator->fails()) {
-        return response()->json([
-            'success' => false,
-            'errors'  => $validator->errors()
-        ], 422);
-    }
-
-    try {
-        DB::beginTransaction();
-
-        // ✅ Generate DN number
-        $lastDN     = DeliveryNote::where('company_id', $invoice->company_id)
-                                  ->orderBy('delivery_note_id', 'desc')
-                                  ->lockForUpdate()  // ✅ hindari race condition
-                                  ->first();
-        $nextNumber = $lastDN ? (int) substr($lastDN->delivery_note_number, -4) + 1 : 1;
-        $dnNumber   = 'SJ-' . $invoice->company->company_code
-                    . '-' . date('Ym')
-                    . '-' . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
-
-        // ✅ Resolve quotation_id dari PO jika ada
-        $quotationId = $invoice->purchaseOrder?->quotation_id ?? null;
-
-        // ✅ Fallback recipient_name
-        $recipientName = $request->recipient_name
-            ?? $invoice->customer?->customer_name
-            ?? $invoice->purchaseOrder?->customer?->customer_name
-            ?? 'N/A';
-
-        // ✅ FIX: Tambah po_id dan quotation_id
-        $deliveryNote = DeliveryNote::create([
-            'company_id'           => $invoice->company_id,
-            'invoice_id'           => $invoice->invoice_id,
-            'po_id'                => $invoice->po_id,       // ✅ dari invoice
-            'quotation_id'         => $quotationId,           // ✅ dari PO → quotation
-            'delivery_note_number' => $dnNumber,
-            'delivery_date'        => $request->delivery_date,
-            'recipient_name'       => $recipientName,
-            'recipient_address'    => $request->recipient_address,
-            'notes'                => $request->notes,
-            'status'               => 'draft',
-            'created_by'           => Auth::id(),
-        ]);
-
-        // ✅ Copy items dari invoice ke delivery note items
-        foreach ($invoice->items as $invoiceItem) {
-            DeliveryNoteItem::create([
-                'delivery_note_id' => $deliveryNote->delivery_note_id,
-                'invoice_item_id'  => $invoiceItem->item_id,
-                'product_id'       => $invoiceItem->product_id,
-                'product_code'     => $invoiceItem->product?->product_code ?? null,
-                'product_name'     => $invoiceItem->product_name,
-                'quantity'         => $invoiceItem->quantity,
-                'unit'             => $invoiceItem->unit,
-                'notes'            => $invoiceItem->notes ?? null,
-            ]);
+        if (!$invoice) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invoice not found'
+            ], 404);
         }
 
-        DB::commit();
+        if ($invoice->payment_status === 'unpaid') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invoice belum dibayar, tidak bisa membuat surat jalan'
+            ], 422);
+        }
 
-        // ✅ Load semua relasi yang dibutuhkan untuk response
-        return response()->json([
-            'success' => true,
-            'message' => 'Delivery note created successfully',
-            'data'    => $deliveryNote->load([
-                'invoice.customer',
-                'purchaseOrder.customer',
-                'quotation',
-                'items.product',
-                'company',
-            ]),
-        ], 201);
+        if ($invoice->items->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invoice tidak memiliki item, tidak dapat membuat surat jalan'
+            ], 422);
+        }
 
-    } catch (\Exception $e) {
-        DB::rollBack();
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to create delivery note',
-            'error'   => $e->getMessage()
-        ], 500);
+        $validator = Validator::make($request->all(), [
+            'delivery_date' => 'required|date',
+            'recipient_name' => 'nullable|string|max:255',
+            'recipient_address' => 'required|string',
+            'notes' => 'nullable|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            DB::beginTransaction();
+
+            // ✅ Generate DN number
+            $lastDN = DeliveryNote::where('company_id', $invoice->company_id)
+                ->orderBy('delivery_note_id', 'desc')
+                ->lockForUpdate()  // ✅ hindari race condition
+                ->first();
+            $nextNumber = $lastDN ? (int) substr($lastDN->delivery_note_number, -4) + 1 : 1;
+            $dnNumber = 'SJ-' . $invoice->company->company_code
+                . '-' . date('Ym')
+                . '-' . str_pad($nextNumber, 4, '0', STR_PAD_LEFT);
+
+            // ✅ Resolve quotation_id dari PO jika ada
+            $quotationId = $invoice->purchaseOrder?->quotation_id ?? null;
+
+            // ✅ Fallback recipient_name
+            $recipientName = $request->recipient_name
+                ?? $invoice->customer?->customer_name
+                ?? $invoice->purchaseOrder?->customer?->customer_name
+                ?? 'N/A';
+
+            // ✅ FIX: Tambah po_id dan quotation_id
+            $deliveryNote = DeliveryNote::create([
+                'company_id' => $invoice->company_id,
+                'invoice_id' => $invoice->invoice_id,
+                'po_id' => $invoice->po_id,       // ✅ dari invoice
+                'quotation_id' => $quotationId,           // ✅ dari PO → quotation
+                'delivery_note_number' => $dnNumber,
+                'delivery_date' => $request->delivery_date,
+                'recipient_name' => $recipientName,
+                'recipient_address' => $request->recipient_address,
+                'notes' => $request->notes,
+                'status' => 'draft',
+                'created_by' => Auth::id(),
+            ]);
+
+            // ✅ Copy items dari invoice ke delivery note items
+            foreach ($invoice->items as $invoiceItem) {
+                DeliveryNoteItem::create([
+                    'delivery_note_id' => $deliveryNote->delivery_note_id,
+                    'invoice_item_id' => $invoiceItem->item_id,
+                    'product_id' => $invoiceItem->product_id,
+                    'product_code' => $invoiceItem->product?->product_code ?? null,
+                    'product_name' => $invoiceItem->product_name,
+                    'quantity' => $invoiceItem->quantity,
+                    'unit' => $invoiceItem->unit,
+                    'notes' => $invoiceItem->notes ?? null,
+                ]);
+            }
+
+            DB::commit();
+
+            // ✅ Load semua relasi yang dibutuhkan untuk response
+            return response()->json([
+                'success' => true,
+                'message' => 'Delivery note created successfully',
+                'data' => $deliveryNote->load([
+                    'invoice.customer',
+                    'purchaseOrder.customer',
+                    'quotation',
+                    'items.product',
+                    'company',
+                ]),
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to create delivery note',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
-}
 
 
     /**
      * Download invoice as PDF
      */
-   public function downloadPdf(Request $request, $id)
-{
-    try {
-        $companyId = $this->getCompanyId($request);
+    public function downloadPdf(Request $request, $id)
+    {
+        try {
+            $companyId = $this->getCompanyId($request);
 
-        $invoice = Invoice::with([
-            'company',
-            'customer',
-            'items.product',        // ✅ TAMBAH .product (untuk kode & brand di blade)
-            'payments' => function($q) {
-                $q->where('status', 'success');
-            },
-            'taxInvoices',          // ✅ TAMBAH (untuk taxDeductions di blade)
-            'purchase_order',       // ✅ TAMBAH (untuk poNumber di blade)
-        ])
-        ->where('company_id', $companyId)
-        ->find($id);
+            $invoice = Invoice::with([
+                'company',
+                'customer',
+                'items.product',        // ✅ TAMBAH .product (untuk kode & brand di blade)
+                'payments' => function ($q) {
+                    $q->where('status', 'success');
+                },
+                'taxInvoices',          // ✅ TAMBAH (untuk taxDeductions di blade)
+                'purchase_order',       // ✅ TAMBAH (untuk poNumber di blade)
+            ])
+                ->where('company_id', $companyId)
+                ->find($id);
 
-        if (!$invoice) {
+            if (!$invoice) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invoice tidak ditemukan'
+                ], 404);
+            }
+
+            $pdf = Pdf::loadView('pdf.invoice', [
+                'invoice' => $invoice,
+                'company' => $invoice->company,  // ✅ TAMBAH pass $company ke view
+            ]);
+
+            // ✅ TAMBAH sanitize filename (hindari error karakter / atau \)
+            $filename = 'Invoice-' . str_replace(['/', '\\'], '_', $invoice->invoice_number) . '.pdf';
+
+            return $pdf->download($filename);
+
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Invoice tidak ditemukan'
-            ], 404);
+                'message' => 'Gagal generate PDF',
+                'error' => $e->getMessage()
+            ], 500);
         }
-
-        $pdf = Pdf::loadView('pdf.invoice', [
-            'invoice' => $invoice,
-            'company' => $invoice->company,  // ✅ TAMBAH pass $company ke view
-        ]);
-
-        // ✅ TAMBAH sanitize filename (hindari error karakter / atau \)
-        $filename = 'Invoice-' . str_replace(['/', '\\'], '_', $invoice->invoice_number) . '.pdf';
-
-        return $pdf->download($filename);
-
-    } catch (\Exception $e) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Gagal generate PDF',
-            'error' => $e->getMessage()
-        ], 500);
     }
-}
 
 
 

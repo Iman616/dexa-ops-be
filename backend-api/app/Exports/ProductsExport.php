@@ -14,10 +14,10 @@ use PhpOffice\PhpSpreadsheet\Style\Fill;
 use PhpOffice\PhpSpreadsheet\Style\Border;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
 
-class ProductsExport implements 
-    FromQuery, 
-    WithHeadings, 
-    WithMapping, 
+class ProductsExport implements
+    FromQuery,
+    WithHeadings,
+    WithMapping,
     WithStyles,
     WithTitle,
     ShouldAutoSize

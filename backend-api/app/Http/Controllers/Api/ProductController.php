@@ -264,32 +264,38 @@ class ProductController extends Controller
     /**
      * ✅ NEW: Export products to Excel
      */
-    public function export(Request $request)
-    {
-        try {
-            $filters = $request->only([
-                'search',
-                'category',
-                'product_type',
-                'brand',
-                'supplier_id',
-                'is_precursor'
-            ]);
+/**
+ * Export products to Excel
+ */
+public function export(Request $request)
+{
+    try {
+        $filters = $request->only([
+            'search',
+            'category',
+            'product_type',
+            'brand',
+            'supplier_id',
+            'is_precursor',
+        ]);
 
-            $fileName = 'products_' . date('YmdHis') . '.xlsx';
+        // Timestamp di nama file supaya tidak bentrok
+        $fileName = 'produk_' . date('YmdHis') . '.xlsx';
 
-            return Excel::download(
-                new ProductsExport($filters),
-                $fileName
-            );
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to export products',
-                'error' => $e->getMessage()
-            ], 500);
-        }
+        return Excel::download(
+            new ProductsExport($filters),
+            $fileName,
+            \Maatwebsite\Excel\Excel::XLSX,
+            ['Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
+        );
+    } catch (\Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Gagal mengekspor produk',
+            'error'   => $e->getMessage(),
+        ], 500);
     }
+}
 
     /**
      * ✅ NEW: Import products from Excel

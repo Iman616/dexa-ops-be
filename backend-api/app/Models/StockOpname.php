@@ -80,19 +80,20 @@ class StockOpname extends Model
     /* ── Static: Generate nomor opname ── */
 
     public static function generateOpnameNumber($companyCode)
-    {
-        $yearMonth = now()->format('Ym');
-        $prefix    = "OPN-{$companyCode}-{$yearMonth}-";
+{
+    $yearMonth = now()->format('Ym');
+    $prefix    = "OPN-{$companyCode}-{$yearMonth}-";
 
-        $last = self::where('opname_number', 'LIKE', "{$prefix}%")
-            ->orderBy('opname_number', 'desc')
-            ->first();
+    // ✅ withTrashed() agar nomor yang sudah dihapus (soft delete) tidak dipakai ulang
+    $last = self::withTrashed()
+        ->where('opname_number', 'LIKE', "{$prefix}%")
+        ->orderBy('opname_number', 'desc')
+        ->first();
 
-        $seq = $last ? (int) substr($last->opname_number, -4) + 1 : 1;
+    $seq = $last ? (int) substr($last->opname_number, -4) + 1 : 1;
 
-        return $prefix . str_pad($seq, 4, '0', STR_PAD_LEFT);
-    }
-
+    return $prefix . str_pad($seq, 4, '0', STR_PAD_LEFT);
+}
     /* ── Boot ── */
 
     protected static function boot()

@@ -143,6 +143,7 @@ class ProformaInvoiceController extends BaseController  // ✅ extends BaseContr
             'items.*.quantity' => 'required|numeric|min:0.01',
             'items.*.unit_price' => 'required|numeric|min:0',
             'items.*.notes' => 'nullable|string',
+            'use_ppn' => 'nullable|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -192,6 +193,7 @@ class ProformaInvoiceController extends BaseController  // ✅ extends BaseContr
                 'status' => 'draft',
                 'notes' => $request->notes,
                 'created_by' => Auth::id(),
+                'use_ppn' => $request->has('use_ppn') ? $request->boolean('use_ppn') : true,
             ]);
 
             foreach ($request->items as $item) {
@@ -201,8 +203,8 @@ class ProformaInvoiceController extends BaseController  // ✅ extends BaseContr
 
                 $pi->items()->create([
                     'product_id' => $item['product_id'],
-                    'product_description' => $product->description ?? null,  // ✅ spesifikasi
-                    'product_code' => $product->product_code ?? null, // ✅ kode katalog
+                    'product_description' => $product->description ?? null,
+                    'product_code' => $product->product_code ?? null,
                     'brand' => $product->brand ?? null,
                     'product_name' => $product->product_name,
                     'quantity' => $item['quantity'],
@@ -269,6 +271,7 @@ class ProformaInvoiceController extends BaseController  // ✅ extends BaseContr
                 'items.*.product_id' => 'required|exists:products,product_id',
                 'items.*.quantity' => 'required|numeric|min:0.01',
                 'items.*.unit_price' => 'required|numeric|min:0',
+                'use_ppn' => 'nullable|boolean',
             ]);
 
             if ($validator->fails()) {
@@ -305,6 +308,7 @@ class ProformaInvoiceController extends BaseController  // ✅ extends BaseContr
                 'payment_terms' => $request->payment_terms,
                 'delivery_terms' => $request->delivery_terms,
                 'notes' => $request->notes,
+                 'use_ppn' => $request->has('use_ppn') ? $request->boolean('use_ppn') : $pi->use_ppn, // ✅ fallback ke nilai lama
             ]);
 
             $pi->items()->delete();
@@ -577,7 +581,8 @@ class ProformaInvoiceController extends BaseController  // ✅ extends BaseContr
     /* =========================
      * CONVERT TO INVOICE
      * ========================= */
-  public function convertToInvoice(Request $request, $id)
+ // CONVERT TO INVOICE
+public function convertToInvoice(Request $request, $id)
 {
     try {
         $companyId = $this->getCompanyId($request);
@@ -587,55 +592,52 @@ class ProformaInvoiceController extends BaseController  // ✅ extends BaseContr
             ->find($id);
 
         if (!$proforma) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Proforma invoice tidak ditemukan'
-            ], 404);
+            return response()->json(['success' => false, 'message' => 'Proforma invoice tidak ditemukan'], 404);
         }
 
         if ($proforma->status !== 'approved') {
             return response()->json([
                 'success' => false,
-                'message' => 'Hanya proforma invoice yang sudah disetujui customer (approved) yang bisa dikonversi ke Invoice'
+                'message' => 'Hanya proforma invoice yang sudah disetujui (approved) yang bisa dikonversi ke Invoice',
+                'current_status' => $proforma->status,
             ], 422);
         }
 
         if ($proforma->converted_to_invoice_id) {
             return response()->json([
                 'success' => false,
-                'message' => 'Proforma invoice sudah pernah dikonversi ke invoice',
-                'data' => ['invoice_id' => $proforma->converted_to_invoice_id]
+                'message' => 'Proforma invoice ini sudah pernah dikonversi ke Invoice.',
+                'data' => [
+                    'invoice_id'   => $proforma->converted_to_invoice_id,
+                    'converted_at' => $proforma->converted_at,
+                ],
             ], 409);
-        }
-
-        // ✅ Validasi konfirmasi pembayaran wajib dilampirkan
-        $validator = Validator::make($request->all(), [
-            'payment_confirmed' => 'required|boolean|accepted',
-            'payment_reference'  => 'nullable|string|max:100',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Konfirmasi pembayaran diperlukan sebelum konversi ke Invoice',
-                'errors'  => $validator->errors()
-            ], 422);
         }
 
         $invoiceNumber = $this->generateInvoiceNumber($companyId);
 
         $invoiceController = new InvoiceController();
 
-        $newRequest = new \Illuminate\Http\Request([
+        // ✅ Pass SEMUA data keuangan dari proforma + use_ppn
+        $newRequest = new Request([
             'company_id'          => $companyId,
+            'customer_id'         => $proforma->customer_id,         // ✅
+            'po_id'               => $proforma->po_id,               // ✅
             'proforma_invoice_id' => $proforma->proforma_id,
             'invoice_number'      => $invoiceNumber,
             'invoice_date'        => now()->format('Y-m-d'),
             'due_date'            => now()->addDays(30)->format('Y-m-d'),
+            'subtotal'            => $proforma->subtotal,
+            'tax_percentage'      => $proforma->tax_percentage,      // ✅
+            'tax_amount'          => $proforma->tax_amount,          // ✅
+            'discount_amount'     => $proforma->discount_amount,     // ✅
+            'total_amount'        => $proforma->total_amount,        // ✅
+            'use_ppn'             => (bool) $proforma->use_ppn,      // ✅ KUNCI
             'payment_terms'       => $proforma->payment_terms ?? 'Net 30 hari',
             'delivery_terms'      => $proforma->delivery_terms ?? 'FOB Destination',
-            'payment_reference'   => $request->payment_reference,  // ✅ referensi bukti bayar
+            'payment_reference'   => $request->payment_reference,
             'create_tax_invoice'  => true,
+            'currency'            => $proforma->currency ?? 'IDR',   // ✅
         ]);
 
         $newRequest->setUserResolver($request->getUserResolver());
@@ -646,11 +648,10 @@ class ProformaInvoiceController extends BaseController  // ✅ extends BaseContr
         return response()->json([
             'success' => false,
             'message' => 'Gagal mengkonversi ke invoice',
-            'error'   => $e->getMessage()
+            'error'   => $e->getMessage(),
         ], 500);
     }
 }
-
 
     /* =========================
      * INVOICE NUMBER GENERATOR

@@ -154,7 +154,7 @@ class QuotationController extends BaseController
         DB::beginTransaction();
         try {
             $quotation = Quotation::create([
-                'company_id' => $companyId, 
+                'company_id' => $companyId,
                 'customer_id' => $request->customer_id,
                 'quotation_number' => $request->quotation_number,
                 'quotation_date' => $request->quotation_date,

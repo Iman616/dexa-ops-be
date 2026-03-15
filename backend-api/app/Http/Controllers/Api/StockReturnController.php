@@ -19,31 +19,39 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use Carbon\Carbon;
 
-class StockReturnController extends BaseController  // ✅ extends BaseController
+class StockReturnController extends BaseController
 {
+    /* ─── Helper: query dengan company_id OR NULL ─── */
+    private function forCompany($companyId)
+    {
+        return StockReturn::where(function ($q) use ($companyId) {
+            $q->where('company_id', $companyId)
+              ->orWhereNull('company_id');
+        });
+    }
+
     /* =========================
      * INDEX
      * ========================= */
     public function index(Request $request)
     {
-        $companyId = $this->getCompanyId($request); // ✅
+        $companyId = $this->getCompanyId($request);
 
-        $query = StockReturn::with([
+        $query = $this->forCompany($companyId)->with([
             'company', 'customer', 'supplier', 'product', 'batch',
             'deliveryNote', 'stockOut', 'stockIn',
             'createdByUser', 'approvedByUser', 'rejectedByUser',
             'processedByUser', 'stockMovements',
-        ])
-        ->where('company_id', $companyId); // ✅ filter company aktif
+        ]);
 
-        if ($request->has('return_type'))  $query->where('return_type', $request->return_type);
-        if ($request->has('status'))       $query->where('status', $request->status);
-        if ($request->has('customer_id'))  $query->where('customer_id', $request->customer_id);
-        if ($request->has('supplier_id'))  $query->where('supplier_id', $request->supplier_id);
-        if ($request->has('product_id'))   $query->where('product_id', $request->product_id);
+        if ($request->has('return_type'))   $query->where('return_type', $request->return_type);
+        if ($request->has('status'))        $query->where('status', $request->status);
+        if ($request->has('customer_id'))   $query->where('customer_id', $request->customer_id);
+        if ($request->has('supplier_id'))   $query->where('supplier_id', $request->supplier_id);
+        if ($request->has('product_id'))    $query->where('product_id', $request->product_id);
         if ($request->has('return_reason')) $query->where('return_reason', $request->return_reason);
-        if ($request->has('start_date'))   $query->where('return_date', '>=', $request->start_date);
-        if ($request->has('end_date'))     $query->where('return_date', '<=', $request->end_date);
+        if ($request->has('start_date'))    $query->where('return_date', '>=', $request->start_date);
+        if ($request->has('end_date'))      $query->where('return_date', '<=', $request->end_date);
 
         if ($request->has('search')) {
             $search = $request->search;
@@ -115,28 +123,37 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
         try {
             DB::beginTransaction();
 
-            $companyId = $this->getCompanyId($request); // ✅
+            $companyId = $this->getCompanyId($request);
+            $company   = Company::find($companyId);
 
-            // ✅ Ambil company dari companyId dinamis, bukan dari request
-            $company = Company::find($companyId);
             $returnNumber = StockReturn::generateReturnNumber(
                 $company->company_code,
                 $request->return_type
             );
 
-            $returnValue = $request->return_value;
-            if (!$returnValue) {
-                if ($request->return_type === 'customer_return' && $request->stock_out_id) {
-                    $stockOut    = StockOut::find($request->stock_out_id);
-                    $returnValue = $stockOut->selling_price * $request->quantity;
-                } elseif ($request->return_type === 'supplier_return' && $request->stock_in_id) {
-                    $stockIn     = StockIn::find($request->stock_in_id);
-                    $returnValue = $stockIn->purchase_price * $request->quantity;
-                }
-            }
+         $returnValue = $request->return_value;
+if (!$returnValue) {
+    // Prioritas utama: ambil dari batch purchase_price
+    if ($request->batch_id) {
+        $batch       = StockBatch::find($request->batch_id);
+        $returnValue = ($batch?->purchase_price ?? 0) * $request->quantity;
+    }
+
+    // Fallback: dari stock_out selling price (customer return)
+    if (!$returnValue && $request->return_type === 'customer_return' && $request->stock_out_id) {
+        $stockOut    = StockOut::find($request->stock_out_id);
+        $returnValue = ($stockOut?->selling_price ?? 0) * $request->quantity;
+    }
+
+    // Fallback: dari stock_in purchase price (supplier return)
+    if (!$returnValue && $request->return_type === 'supplier_return' && $request->stock_in_id) {
+        $stockIn     = StockIn::find($request->stock_in_id);
+        $returnValue = ($stockIn?->purchase_price ?? 0) * $request->quantity;
+    }
+}
 
             $return = StockReturn::create([
-                'company_id'       => $companyId, // ✅ dari BaseController
+                'company_id'       => $companyId,
                 'return_type'      => $request->return_type,
                 'delivery_note_id' => $request->delivery_note_id,
                 'stock_out_id'     => $request->stock_out_id,
@@ -188,18 +205,16 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
     /* =========================
      * SHOW
      * ========================= */
-    public function show(Request $request, $id)  // ✅ tambah Request
+    public function show(Request $request, $id)
     {
-        $companyId = $this->getCompanyId($request); // ✅
+        $companyId = $this->getCompanyId($request);
 
-        $return = StockReturn::with([
+        $return = $this->forCompany($companyId)->with([
             'company', 'customer', 'supplier', 'product', 'batch',
             'deliveryNote.items', 'stockOut', 'stockIn',
             'createdByUser', 'approvedByUser', 'rejectedByUser',
             'processedByUser', 'stockMovements',
-        ])
-        ->where('company_id', $companyId)
-        ->find($id);
+        ])->find($id);
 
         if (!$return) {
             return response()->json(['success' => false, 'message' => 'Stock return not found'], 404);
@@ -217,9 +232,8 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
      * ========================= */
     public function update(Request $request, $id)
     {
-        $companyId = $this->getCompanyId($request); // ✅
-
-        $return = StockReturn::where('company_id', $companyId)->find($id);
+        $companyId = $this->getCompanyId($request);
+        $return    = $this->forCompany($companyId)->find($id);
 
         if (!$return) {
             return response()->json(['success' => false, 'message' => 'Stock return not found'], 404);
@@ -233,16 +247,16 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
         }
 
         $validator = Validator::make($request->all(), [
-            'return_date'    => 'sometimes|required|date',
-            'quantity'       => 'sometimes|required|numeric|min:0.01',
-            'return_reason'  => 'sometimes|required|in:damaged,expired,wrong_item,quality_issue,overstocked,customer_request,other',
-            'return_notes'   => 'nullable|string',
-            'return_value'   => 'nullable|numeric|min:0',
-            'refund_method'  => 'nullable|in:cash,transfer,credit_note,replacement,none',
-            'refund_amount'  => 'nullable|numeric|min:0',
-            'proof_file'     => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
-            'signed_by'      => 'nullable|string|max:255',
-            'signed_position'=> 'nullable|string|max:100',
+            'return_date'     => 'sometimes|required|date',
+            'quantity'        => 'sometimes|required|numeric|min:0.01',
+            'return_reason'   => 'sometimes|required|in:damaged,expired,wrong_item,quality_issue,overstocked,customer_request,other',
+            'return_notes'    => 'nullable|string',
+            'return_value'    => 'nullable|numeric|min:0',
+            'refund_method'   => 'nullable|in:cash,transfer,credit_note,replacement,none',
+            'refund_amount'   => 'nullable|numeric|min:0',
+            'proof_file'      => 'nullable|file|mimes:pdf,jpg,jpeg,png|max:5120',
+            'signed_by'       => 'nullable|string|max:255',
+            'signed_position' => 'nullable|string|max:100',
         ]);
 
         if ($validator->fails()) {
@@ -279,11 +293,10 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
     /* =========================
      * DESTROY
      * ========================= */
-    public function destroy(Request $request, $id)  // ✅ tambah Request
+    public function destroy(Request $request, $id)
     {
-        $companyId = $this->getCompanyId($request); // ✅
-
-        $return = StockReturn::where('company_id', $companyId)->find($id);
+        $companyId = $this->getCompanyId($request);
+        $return    = $this->forCompany($companyId)->find($id);
 
         if (!$return) {
             return response()->json(['success' => false, 'message' => 'Stock return not found'], 404);
@@ -309,11 +322,10 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
     /* =========================
      * SUBMIT
      * ========================= */
-    public function submit(Request $request, $id)  // ✅ tambah Request
+    public function submit(Request $request, $id)
     {
-        $companyId = $this->getCompanyId($request); // ✅
-
-        $return = StockReturn::where('company_id', $companyId)->find($id);
+        $companyId = $this->getCompanyId($request);
+        $return    = $this->forCompany($companyId)->find($id);
 
         if (!$return) {
             return response()->json(['success' => false, 'message' => 'Stock return not found'], 404);
@@ -322,7 +334,9 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
         try {
             $return->submit();
             return response()->json([
-                'success' => true, 'message' => 'Stock return submitted for approval', 'data' => $return->fresh(),
+                'success' => true,
+                'message' => 'Stock return submitted for approval',
+                'data'    => $return->fresh(),
             ], 200);
         } catch (\Exception $e) {
             return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
@@ -334,9 +348,8 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
      * ========================= */
     public function approve(Request $request, $id)
     {
-        $companyId = $this->getCompanyId($request); // ✅
-
-        $return = StockReturn::where('company_id', $companyId)->find($id);
+        $companyId = $this->getCompanyId($request);
+        $return    = $this->forCompany($companyId)->find($id);
 
         if (!$return) {
             return response()->json(['success' => false, 'message' => 'Stock return not found'], 404);
@@ -350,7 +363,8 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
         try {
             $return->approve($request->approval_notes);
             return response()->json([
-                'success' => true, 'message' => 'Stock return approved successfully',
+                'success' => true,
+                'message' => 'Stock return approved successfully',
                 'data'    => $return->fresh(['approvedByUser']),
             ], 200);
         } catch (\Exception $e) {
@@ -363,9 +377,8 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
      * ========================= */
     public function reject(Request $request, $id)
     {
-        $companyId = $this->getCompanyId($request); // ✅
-
-        $return = StockReturn::where('company_id', $companyId)->find($id);
+        $companyId = $this->getCompanyId($request);
+        $return    = $this->forCompany($companyId)->find($id);
 
         if (!$return) {
             return response()->json(['success' => false, 'message' => 'Stock return not found'], 404);
@@ -379,7 +392,8 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
         try {
             $return->reject($request->rejection_reason);
             return response()->json([
-                'success' => true, 'message' => 'Stock return rejected',
+                'success' => true,
+                'message' => 'Stock return rejected',
                 'data'    => $return->fresh(['rejectedByUser']),
             ], 200);
         } catch (\Exception $e) {
@@ -392,75 +406,40 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
      * ========================= */
     public function process(Request $request, $id)
     {
-        $companyId = $this->getCompanyId($request); // ✅
+        $companyId = $this->getCompanyId($request);
+        $return    = $this->forCompany($companyId)->find($id);
 
-        $return = StockReturn::where('company_id', $companyId)->find($id);
-
-        if (!$return) {
+        if (!$return)
             return response()->json(['success' => false, 'message' => 'Stock return not found'], 404);
-        }
 
-        if ($return->status !== 'approved') {
+        if ($return->status !== 'approved')
             return response()->json(['success' => false, 'message' => 'Only approved returns can be processed'], 409);
-        }
 
-        $validator = Validator::make($request->all(), ['processing_notes' => 'nullable|string']);
-        if ($validator->fails()) {
+        $validator = Validator::make($request->all(), [
+            'processing_notes' => 'nullable|string',
+        ]);
+
+        if ($validator->fails())
             return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
-        }
 
         try {
-            DB::beginTransaction();
-
-            $movementType       = 'RETURN';
-            $quantityAdjustment = $return->return_type === 'customer_return'
-                ? $return->quantity
-                : -$return->quantity;
-
-            StockMovement::create([
-                'product_id'     => $return->product_id,
-                'batch_id'       => $return->batch_id,
-                'movement_type'  => $movementType,
-                'quantity'       => abs($return->quantity),
-                'unit_cost'      => $return->return_value / $return->quantity,
-                'reference_id'   => $return->return_id,
-                'reference_type' => 'stock_return',
-                'notes'          => $return->return_type === 'customer_return'
-                    ? "Customer return: {$return->return_number}"
-                    : "Supplier return: {$return->return_number}",
-                'created_by'     => Auth::id(),
-            ]);
-
-            if ($return->batch_id) {
-                $batch = StockBatch::find($return->batch_id);
-                if ($batch) {
-                    $batch->quantity_available += $quantityAdjustment;
-                    $batch->status = $batch->quantity_available <= 0
-                        ? 'depleted'
-                        : ($batch->expiry_date && $batch->expiry_date < now() ? 'expired' : 'active');
-                    $batch->save();
-                }
-            }
-
-            $return->update([
-                'status'           => 'completed',
-                'processed_by'     => Auth::id(),
-                'processed_at'     => now(),
-                'processing_notes' => $request->processing_notes,
-            ]);
-
-            DB::commit();
+            // ✅ Delegasi ke model — model yang handle:
+            // StockIn/StockOut + batch update + StockMovement + EndingStock
+            $return->process($request->processing_notes);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Stock return processed successfully and stock adjusted',
-                'data'    => $return->load(['product', 'batch', 'customer', 'supplier', 'processedByUser']),
+                'data'    => $return->load([
+                    'product', 'batch', 'customer', 'supplier', 'processedByUser',
+                ]),
             ], 200);
 
         } catch (\Exception $e) {
-            DB::rollBack();
             return response()->json([
-                'success' => false, 'message' => 'Failed to process stock return', 'error' => $e->getMessage(),
+                'success' => false,
+                'message' => 'Failed to process stock return',
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
@@ -470,9 +449,8 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
      * ========================= */
     public function cancel(Request $request, $id)
     {
-        $companyId = $this->getCompanyId($request); // ✅
-
-        $return = StockReturn::where('company_id', $companyId)->find($id);
+        $companyId = $this->getCompanyId($request);
+        $return    = $this->forCompany($companyId)->find($id);
 
         if (!$return) {
             return response()->json(['success' => false, 'message' => 'Stock return not found'], 404);
@@ -498,11 +476,12 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
      * ========================= */
     public function createFromDeliveryNote(Request $request, $deliveryNoteId)
     {
-        $companyId = $this->getCompanyId($request); // ✅
+        $companyId = $this->getCompanyId($request);
 
-        // ✅ Pastikan delivery note milik company aktif
         $deliveryNote = DeliveryNote::with(['items', 'company', 'purchaseOrder.customer'])
-            ->where('company_id', $companyId)
+            ->where(function ($q) use ($companyId) {
+                $q->where('company_id', $companyId)->orWhereNull('company_id');
+            })
             ->find($deliveryNoteId);
 
         if (!$deliveryNote) {
@@ -540,8 +519,8 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
 
             $return = $deliveryNote->createReturn([
                 'product_id'   => $item->product_id,
-                'batch_id'     => $request->batch_id ?? $stockOut->batch_id ?? null,
-                'stock_out_id' => $stockOut->stock_out_id ?? null,
+                'batch_id'     => $request->batch_id ?? $stockOut?->batch_id ?? null,
+                'stock_out_id' => $stockOut?->stock_out_id ?? null,
                 'quantity'     => $request->quantity,
                 'unit'         => $item->unit,
                 'return_value' => $request->quantity * ($item->unit_price ?? 0),
@@ -565,11 +544,12 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
      * ========================= */
     public function createFromStockIn(Request $request, $stockInId)
     {
-        $companyId = $this->getCompanyId($request); // ✅
+        $companyId = $this->getCompanyId($request);
 
-        // ✅ Pastikan stock in milik company aktif
         $stockIn = StockIn::with(['company', 'product', 'batch', 'supplierPo.supplier'])
-            ->where('company_id', $companyId)
+            ->where(function ($q) use ($companyId) {
+                $q->where('company_id', $companyId)->orWhereNull('company_id');
+            })
             ->find($stockInId);
 
         if (!$stockIn) {
@@ -617,9 +597,8 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
      * ========================= */
     public function uploadProof(Request $request, $id)
     {
-        $companyId = $this->getCompanyId($request); // ✅
-
-        $return = StockReturn::where('company_id', $companyId)->find($id);
+        $companyId = $this->getCompanyId($request);
+        $return    = $this->forCompany($companyId)->find($id);
 
         if (!$return) {
             return response()->json(['success' => false, 'message' => 'Stock return not found'], 404);
@@ -653,11 +632,10 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
     /* =========================
      * DOWNLOAD PROOF
      * ========================= */
-    public function downloadProof(Request $request, $id)  // ✅ tambah Request
+    public function downloadProof(Request $request, $id)
     {
-        $companyId = $this->getCompanyId($request); // ✅
-
-        $return = StockReturn::where('company_id', $companyId)->find($id);
+        $companyId = $this->getCompanyId($request);
+        $return    = $this->forCompany($companyId)->find($id);
 
         if (!$return) {
             return response()->json(['success' => false, 'message' => 'Stock return not found'], 404);
@@ -680,11 +658,10 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
     /* =========================
      * DELETE PROOF
      * ========================= */
-    public function deleteProof(Request $request, $id)  // ✅ tambah Request
+    public function deleteProof(Request $request, $id)
     {
-        $companyId = $this->getCompanyId($request); // ✅
-
-        $return = StockReturn::where('company_id', $companyId)->find($id);
+        $companyId = $this->getCompanyId($request);
+        $return    = $this->forCompany($companyId)->find($id);
 
         if (!$return) {
             return response()->json(['success' => false, 'message' => 'Stock return not found'], 404);
@@ -704,12 +681,12 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
     /* =========================
      * GET BY DELIVERY NOTE
      * ========================= */
-    public function getByDeliveryNote(Request $request, $deliveryNoteId)  // ✅ tambah Request
+    public function getByDeliveryNote(Request $request, $deliveryNoteId)
     {
-        $companyId = $this->getCompanyId($request); // ✅
+        $companyId = $this->getCompanyId($request);
 
-        $returns = StockReturn::with(['product', 'batch', 'customer', 'createdByUser', 'approvedByUser', 'processedByUser'])
-            ->where('company_id', $companyId)
+        $returns = $this->forCompany($companyId)
+            ->with(['product', 'batch', 'customer', 'createdByUser', 'approvedByUser', 'processedByUser'])
             ->where('delivery_note_id', $deliveryNoteId)
             ->get();
 
@@ -721,12 +698,12 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
     /* =========================
      * GET BY STOCK OUT
      * ========================= */
-    public function getByStockOut(Request $request, $stockOutId)  // ✅ tambah Request
+    public function getByStockOut(Request $request, $stockOutId)
     {
-        $companyId = $this->getCompanyId($request); // ✅
+        $companyId = $this->getCompanyId($request);
 
-        $returns = StockReturn::with(['product', 'batch', 'customer', 'deliveryNote'])
-            ->where('company_id', $companyId)
+        $returns = $this->forCompany($companyId)
+            ->with(['product', 'batch', 'customer', 'deliveryNote'])
             ->where('stock_out_id', $stockOutId)
             ->get();
 
@@ -738,12 +715,12 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
     /* =========================
      * GET BY STOCK IN
      * ========================= */
-    public function getByStockIn(Request $request, $stockInId)  // ✅ tambah Request
+    public function getByStockIn(Request $request, $stockInId)
     {
-        $companyId = $this->getCompanyId($request); // ✅
+        $companyId = $this->getCompanyId($request);
 
-        $returns = StockReturn::with(['product', 'batch', 'supplier', 'stockIn'])
-            ->where('company_id', $companyId)
+        $returns = $this->forCompany($companyId)
+            ->with(['product', 'batch', 'supplier', 'stockIn'])
             ->where('stock_in_id', $stockInId)
             ->get();
 
@@ -757,9 +734,9 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
      * ========================= */
     public function summary(Request $request)
     {
-        $companyId = $this->getCompanyId($request); // ✅
+        $companyId = $this->getCompanyId($request);
 
-        $base = StockReturn::where('company_id', $companyId); // ✅ hapus manual filter company_id
+        $base = $this->forCompany($companyId);
 
         if ($request->has('start_date') && $request->has('end_date')) {
             $base->whereBetween('return_date', [$request->start_date, $request->end_date]);
@@ -774,9 +751,11 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
             'completed'           => (clone $base)->completed()->count(),
             'total_return_value'  => (clone $base)->sum('return_value'),
             'total_refund_amount' => (clone $base)->where('status', 'completed')->sum('refund_amount'),
-            'by_reason'           => (clone $base)->select('return_reason', DB::raw('count(*) as count'))
+            'by_reason'           => (clone $base)
+                ->select('return_reason', DB::raw('count(*) as count'))
                 ->groupBy('return_reason')->get(),
-            'by_status'           => (clone $base)->select('status', DB::raw('count(*) as count'))
+            'by_status'           => (clone $base)
+                ->select('status', DB::raw('count(*) as count'))
                 ->groupBy('status')->get(),
         ];
 
@@ -799,8 +778,7 @@ class StockReturnController extends BaseController  // ✅ extends BaseControlle
         }
 
         try {
-            $companyId = $this->getCompanyId($request); // ✅ hapus company_id dari validator
-
+            $companyId    = $this->getCompanyId($request);
             $company      = Company::find($companyId);
             $returnNumber = StockReturn::generateReturnNumber(
                 $company->company_code,

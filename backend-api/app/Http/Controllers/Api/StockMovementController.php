@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Auth;
 
 class StockMovementController extends Controller
 {
-    public function index(Request $request)
+  public function index(Request $request)
 {
     $query = StockMovement::with([
         'product:product_id,product_name,product_code,product_type',
@@ -22,10 +22,20 @@ class StockMovementController extends Controller
         'createdByUser:user_id,full_name',
     ]);
 
-    // ✅ FIX: filter company via join ke stock_batches
+    // ✅ FIX: include NULL company_id (import/opening batches)
     if ($request->filled('company_id')) {
-        $query->whereHas('batch', function ($q) use ($request) {
-            $q->where('company_id', $request->company_id);
+        $companyId = $request->company_id;
+        $query->where(function ($q) use ($companyId) {
+            // movement yang batchnya milik company ini
+            $q->whereHas('batch', fn($bq) =>
+                $bq->where('company_id', $companyId)
+            )
+            // movement yang batchnya NULL company (import batch)
+            ->orWhereHas('batch', fn($bq) =>
+                $bq->whereNull('company_id')
+            )
+            // movement tanpa batch sama sekali (edge case)
+            ->orWhereNull('batch_id');
         });
     }
 
@@ -41,11 +51,12 @@ class StockMovementController extends Controller
     if ($request->filled('reference_type'))
         $query->where('reference_type', $request->reference_type);
 
+    // ✅ FIX: gunakan movement_date bukan created_at untuk filter tanggal
     if ($request->filled('start_date'))
-        $query->whereDate('created_at', '>=', $request->start_date);
+        $query->whereDate('movement_date', '>=', $request->start_date);
 
     if ($request->filled('end_date'))
-        $query->whereDate('created_at', '<=', $request->end_date);
+        $query->whereDate('movement_date', '<=', $request->end_date);
 
     if ($request->filled('search')) {
         $s = $request->search;
@@ -59,8 +70,9 @@ class StockMovementController extends Controller
         });
     }
 
+    // ✅ FIX: default sort by movement_id desc (lebih reliable dari created_at)
     $query->orderBy(
-        $request->get('sort_by', 'created_at'),
+        $request->get('sort_by', 'movement_id'),
         $request->get('sort_order', 'desc')
     );
 
@@ -68,8 +80,7 @@ class StockMovementController extends Controller
         'success' => true,
         'data'    => $query->paginate($request->get('per_page', 15)),
     ], 200);
-}
-    public function store(Request $request)
+}    public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
             'company_id'     => 'required|exists:companies,company_id', // ✅ TAMBAH

@@ -33,7 +33,6 @@ class ProformaInvoice extends Model
         'discount_amount',
         'discount_percentage', // ✅ persen diskon
         'total_amount',
-        'grand_total',         // ✅ final total
         'use_ppn',             // ✅ flag PPN/Non-PPN
 
         // Info
@@ -79,7 +78,6 @@ class ProformaInvoice extends Model
         'discount_amount'     => 'decimal:2',
         'discount_percentage' => 'decimal:2',  // ✅
         'total_amount'        => 'decimal:2',
-        'grand_total'         => 'decimal:2',  // ✅
 
         // Boolean
         'use_ppn'             => 'boolean',    // ✅
@@ -269,7 +267,6 @@ class ProformaInvoice extends Model
                 'dpp_adjustment' => $dpp,
                 'tax_amount'     => $taxAmount,
                 'total_amount'   => $total,
-                'grand_total'    => $total,
                 'updated_at'     => now(),
             ]);
 
@@ -277,7 +274,6 @@ class ProformaInvoice extends Model
         $this->dpp_adjustment = $dpp;
         $this->tax_amount     = $taxAmount;
         $this->total_amount   = $total;
-        $this->grand_total    = $total;
     }
 
     public function convertToInvoice($userId = null): array

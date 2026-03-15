@@ -240,14 +240,14 @@
         @endif
 
         {{-- Dibayar --}}
-     
+
         {{-- Kelebihan Bayar --}}
-     
+
 
         {{-- Total Harus Dibayar --}}
-  
 
-      
+
+
 
     </table>
 </div>

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\PurchaseOrder;
+use App\Models\DocumentTerm; 
 use Illuminate\Support\Facades\Storage;
 use Barryvdh\DomPDF\Facade\Pdf;
 
@@ -12,7 +13,6 @@ class PurchaseOrderPdfService
 
     public function __construct()
     {
-        // Force pakai disk local supaya konsisten
         $this->disk = Storage::disk('local');
     }
 
@@ -26,7 +26,6 @@ class PurchaseOrderPdfService
         $pdf = Pdf::loadView('pdf.purchase_order', $data)
                     ->setPaper('a4', 'portrait');
 
-        // sanitize nomor PO (hindari slash path bug)
         $safePoNumber = preg_replace('/[\/\\\\]/', '-', $po->po_number);
 
         $this->disk->makeDirectory('temp');
@@ -76,47 +75,48 @@ class PurchaseOrderPdfService
     }
 
     /**
-     * ✅ PERBAIKAN: Prepare data PDF dengan perhitungan manual
+     * ✅ Prepare data PDF + load dynamic terms
      */
-private function preparePdfData(PurchaseOrder $po)
-{
-    // ✅ Tambah items.product agar brand & katalog bisa diakses
-    $po->load(['company', 'customer', 'items.product']);
+    private function preparePdfData(PurchaseOrder $po)
+    {
+        $po->load(['company', 'customer', 'items.product']);
 
-    $subtotal = 0;
-    foreach ($po->items as $item) {
-        $itemSubtotal   = $item->quantity * $item->unit_price;
-        $discountAmount = $itemSubtotal * ($item->discount_percent / 100);
-        $item->total    = $itemSubtotal - $discountAmount; // ✅ Fix bug katalog null
-        $subtotal      += $item->total;
+        $subtotal = 0;
+        foreach ($po->items as $item) {
+            $itemSubtotal   = $item->quantity * $item->unit_price;
+            $discountAmount = $itemSubtotal * ($item->discount_percent / 100);
+            $item->total    = $itemSubtotal - $discountAmount;
+            $subtotal      += $item->total;
+        }
+
+        $ppn         = $subtotal * 0.11;
+        $grand_total = $subtotal + $ppn;
+
+        // ✅ Load dynamic document terms untuk purchase_order
+        $terms = DocumentTerm::where('company_id', $po->company_id)
+            ->where('document_type', 'purchase_order')
+            ->where('is_active', true)
+            ->orderBy('sort_order')
+            ->get();
+
+        return [
+            'po'          => $po,
+            'company'     => $po->company,
+            'customer'    => $po->customer,
+            'items'       => $po->items,
+            'subtotal'    => $subtotal,
+            'ppn'         => $ppn,
+            'ppn_percent' => 11,
+            'grand_total' => $grand_total,
+            'terms'       => $terms, // ✅ Pass ke view
+        ];
     }
 
-    $ppn         = $subtotal * 0.11;
-    $grand_total = $subtotal + $ppn;
-
-    return [
-        'po'          => $po,
-        'company'     => $po->company,
-        'customer'    => $po->customer,
-        'items'       => $po->items,
-        'subtotal'    => $subtotal,
-        'ppn'         => $ppn,
-        'ppn_percent' => 11,
-        'grand_total' => $grand_total,
-    ];
-}
-
-    /**
-     * Helper format rupiah
-     */
     public static function formatCurrency($number)
     {
         return 'Rp ' . number_format($number, 0, ',', '.');
     }
 
-    /**
-     * Helper format tanggal Indonesia
-     */
     public static function formatDate($date)
     {
         $months = [

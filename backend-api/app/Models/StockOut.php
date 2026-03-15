@@ -42,11 +42,13 @@ class StockOut extends Model
     /**
      * Calculate total value (qty × selling price)
      */
-    public function getTotalValueAttribute()
-    {
-        return $this->quantity * $this->selling_price;
+public function getTotalValueAttribute()
+{
+    if (in_array($this->transaction_type, ['return_supplier', 'return_customer'])) {
+        return $this->quantity * ($this->batch?->purchase_price ?? 0);
     }
-
+    return $this->quantity * $this->selling_price;
+}
     /**
      * ✅ NEW: Calculate HPP (Harga Pokok Penjualan)
      * HPP = qty × purchase_price dari batch

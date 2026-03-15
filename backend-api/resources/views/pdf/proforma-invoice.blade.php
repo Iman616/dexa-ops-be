@@ -8,10 +8,11 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
     body {
-      font-family: Arial, sans-serif;
-      font-size: 11px;
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 11pt;
+      line-height: 1.4;
+      padding: 20px 40px;
       color: #000;
-      padding: 25px 30px;
     }
 
     /* =========================================================
@@ -35,7 +36,7 @@
     .header-divider {
       display: table-cell;
       width: 4px;
-      background-color: #c00;   /* Garis merah vertikal seperti di PDF */
+      background-color: #c00;
       vertical-align: top;
     }
     .header-company {
@@ -46,7 +47,7 @@
     .header-company .company-name {
       font-size: 22px;
       font-weight: bold;
-      color: #003087;           /* Biru navy seperti di PDF */
+      color: #003087;
       letter-spacing: 0.5px;
       margin-bottom: 4px;
     }
@@ -80,7 +81,7 @@
     }
 
     /* =========================================================
-       INFO BARIS : Nomor/Tanggal | No. Surat Pesanan/Paket
+       INFO BARIS
     ========================================================= */
     .info-row {
       width: 100%;
@@ -122,7 +123,7 @@
     .items-table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 10px;
+      font-size: 8.5pt;
       margin-bottom: 0;
     }
     .items-table th, .items-table td {
@@ -133,39 +134,21 @@
       background-color: #f2f2f2;
       text-align: center;
       font-weight: bold;
+      vertical-align: middle;
+      line-height: 1.2;
     }
-    /* Baris header atas (QTY spanning 2 kolom) */
     .items-table .th-qty { text-align: center; }
-    /* Baris header bawah (Vol | Satuan) */
     .items-table .th-sub { font-size: 9px; }
 
     .items-table td.center { text-align: center; }
     .items-table td.right  { text-align: right; white-space: nowrap; }
 
     /* =========================================================
-       TOTAL SECTION (rata kanan)
+       SUMMARY
     ========================================================= */
-    .total-wrapper {
-      width: 100%;
-      border-collapse: collapse;
-    }
-    .total-wrapper .total-inner {
-      width: 100%;
-      border-collapse: collapse;
-      border: 1px solid #000;
-      border-top: none; /* menyambung dari tabel items */
-    }
-    .total-inner td {
-      padding: 4px 8px;
-      font-size: 10.5px;
-      border: none;
-    }
-    .total-inner tr { border-top: 1px solid #aaa; }
-    .total-inner .t-label { text-align: right; font-weight: bold; width: 82%; border-right: 1px solid #000; }
-    .total-inner .t-value { text-align: right; white-space: nowrap; }
-    .total-inner .t-grand .t-label,
-    .total-inner .t-grand .t-value { font-weight: bold; }
-    /* baris subtotal – label rata kanan menyambung dari kolom Jumlah */
+    .summary-row  { text-align: right; font-weight: bold; padding-right: 8px; }
+    .summary-value { text-align: right; font-weight: bold; padding-right: 8px; }
+    .total-row td { font-weight: bold; background-color: #f9f9f9; }
 
     /* =========================================================
        TERBILANG
@@ -177,6 +160,12 @@
       font-style: italic;
       font-weight: bold;
     }
+
+    /* ✅ TERMS SECTION - sama persis dengan Quotation & PO */
+    .terms-section { margin-top: 20px; page-break-inside: avoid; }
+    .terms-section p { font-weight: bold; margin-bottom: 8px; font-size: 10pt; text-decoration: underline; }
+    .terms-section ol { margin-left: 20px; font-size: 9.5pt; }
+    .terms-section li { margin-bottom: 5px; text-align: justify; line-height: 1.3; }
 
     /* =========================================================
        BANK INFO
@@ -204,28 +193,23 @@
       text-underline-offset: 3px;
     }
     .signature-section .sig-position { margin-top: 2px; }
+
+    @page { margin: 1.5cm 2cm; }
   </style>
 </head>
 <body>
 
   {{-- =========================================================
-       HEADER : Logo + Nama Perusahaan
+       HEADER : Logo
   ========================================================= --}}
-  <div class="header-wrapper">
-    <div style="text-align:center; margin-bottom:25;">
-
-@if($company->logo_base64)
-  <img
+  <div style="text-align:center; margin-bottom:25px;">
+    @if($company->logo_base64)
+    <img
       src="{{ $company->logo_base64 }}"
       style="width:750px; height:auto;"
-      alt="Logo
-    >@endif
-</div>
-
-    {{-- Garis merah vertikal --}}
-    <div class="header-divider"></div>
-
-
+      alt="Logo"
+    >
+    @endif
   </div>
 
   {{-- =========================================================
@@ -236,7 +220,7 @@
   </div>
 
   {{-- =========================================================
-       NOMOR / TANGGAL  |  NO. SURAT PESANAN / PAKET PEKERJAAN
+       NOMOR / TANGGAL
   ========================================================= --}}
   <div class="info-row">
     <table>
@@ -255,7 +239,6 @@
             </tr>
           </table>
         </td>
-
       </tr>
     </table>
   </div>
@@ -265,7 +248,6 @@
   ========================================================= --}}
   <table class="customer-box">
     <tr>
-      {{-- Kolom kiri: nama & alamat customer --}}
       <td class="customer-left">
         <div style="font-weight:bold; margin-bottom:3px;">Kepada Yth:</div>
         <div style="font-weight:bold;">{{ strtoupper($proforma->customer_name) }}</div>
@@ -274,7 +256,6 @@
         @endif
       </td>
 
-      {{-- Kolom kanan: no surat pesanan & paket --}}
       <td>
         <table style="width:100%;">
           @if(!empty($proforma->po_number))
@@ -298,80 +279,100 @@
 
   {{-- =========================================================
        ITEMS TABLE
-       Header: No | Jenis Barang | Spesifikasi | QTY(Vol/Satuan) | Satuan(Rp) | Jumlah(Rp)
   ========================================================= --}}
-  <table class="items-table">
-    <thead>
-      {{-- Baris 1: header utama --}}
-      <tr>
-        <th rowspan="2" style="width:28px;">No</th>
-        <th rowspan="2" style="width:150px;">Jenis Barang</th>
-        <th rowspan="2" style="width:90px;">Brand</th>
-        <th rowspan="2">Spesifikasi</th>
-        <th colspan="2" class="th-qty">QTY</th>
-        <th rowspan="2" style="width:88px;">
-          Satuan<br><span style="font-size:9px;">(Rp)</span>
-        </th>
-        <th rowspan="2" style="width:100px;">
-          Jumlah<br><span style="font-size:9px;">(Rp)</span>
-        </th>
-      </tr>
-      {{-- Baris 2: sub-header QTY --}}
-      <tr>
-        <th class="th-sub" style="width:38px;">Vol</th>
-        <th class="th-sub" style="width:52px;">Satuan</th>
-      </tr>
-    </thead>
-    <tbody>
-      @foreach($items as $index => $item)
-      <tr>
-        <td class="center">{{ $index + 1 }}</td>
-        <td>{{ $item->product_name }}</td>
-<td class="center">{{ $item->product?->brand ?? '-' }}</td>
-<td class="center">
-    {{ $item->product_description ?? $item->product?->product_code ?? '-' }}
-</td>
-        <td class="center">{{ number_format($item->quantity, 0) }}</td>
-        <td class="center">{{ $item->unit }}</td>
-        <td class="right">Rp {{ number_format($item->unit_price, 0, ',', '.') }}</td>
-        <td class="right">Rp {{ number_format($item->quantity * $item->unit_price, 0, ',', '.') }}</td>
-      </tr>
-      @endforeach
-
-      {{-- Baris Subtotal --}}
+  {{-- =========================================================
+     ITEMS TABLE
+========================================================= --}}
+{{-- ITEMS TABLE --}}
+<table class="items-table">
+  <thead>
     <tr>
-    <td colspan="7" style="text-align:right; font-weight:bold; border-right:1px solid #000;">Subtotal</td>
-    <td class="right" style="font-weight:bold;">Rp {{ number_format($subtotal, 0, ',', '.') }}</td>
-</tr>
-<tr>
-    <td colspan="7" style="text-align:right; font-weight:bold; border-right:1px solid #000;">
-        PPN {{ number_format($proforma->tax_percentage, 0) }}%
-    </td>
-    <td class="right">Rp {{ number_format($ppn, 0, ',', '.') }}</td>
-</tr>
-@if(!empty($proforma->discount_amount) && $proforma->discount_amount > 0)
-<tr>
-    <td colspan="7" style="text-align:right; font-weight:bold; border-right:1px solid #000;">Diskon</td>
-    <td class="right">- Rp {{ number_format($proforma->discount_amount, 0, ',', '.') }}</td>
-</tr>
-@endif
-<tr>
-    <td colspan="7" style="text-align:right; font-weight:bold; border-right:1px solid #000;">Total</td>
-    <td class="right" style="font-weight:bold;">Rp {{ number_format($total, 0, ',', '.') }}</td>
-</tr>
-<tr class="terbilang-row">
-    <td colspan="8"><strong>Terbilang :</strong>&nbsp;&nbsp;{{ $terbilang ?? '' }}</td>
-</tr>
+      <th rowspan="2" style="width:28px;">No</th>
+      <th rowspan="2" style="width:150px;">Jenis Barang</th>
+      <th rowspan="2" style="width:90px;">Brand</th>
+      <th rowspan="2">Spesifikasi</th>
+      <th colspan="2" class="th-qty">QTY</th>
+      <th rowspan="2" style="width:88px;">
+        Satuan<br><span style="font-size:9px;">(Rp)</span>
+      </th>
+      <th rowspan="2" style="width:100px;">
+        Jumlah<br><span style="font-size:9px;">(Rp)</span>
+      </th>
+    </tr>
+    <tr>
+      <th class="th-sub" style="width:38px;">Vol</th>
+      <th class="th-sub" style="width:52px;">Satuan</th>
+    </tr>
+  </thead>
+  <tbody>
+    @foreach($items as $index => $item)
+    @php
+      $itemGross  = $item->quantity * $item->unit_price;
+      $discPct    = (float)($item->discount_percent ?? 0);
+      $discAmount = $itemGross * ($discPct / 100);
+      $itemNet    = $itemGross - $discAmount;
+    @endphp
+    <tr>
+      <td class="center">{{ $index + 1 }}</td>
+      <td>{{ $item->product_name }}</td>
+      <td class="center">{{ $item->brand ?? '-' }}</td>
+      <td class="center">{{ $item->product_description ?? $item->product_code ?? '-' }}</td>
+      <td class="center">{{ number_format($item->quantity, 0) }}</td>
+      <td class="center">{{ $item->unit }}</td>
+      <td class="right">Rp {{ number_format($item->unit_price, 0, ',', '.') }}</td>
+      {{-- Jumlah sudah net setelah diskon per item --}}
+      <td class="right">Rp {{ number_format($itemNet, 0, ',', '.') }}</td>
+    </tr>
+    @endforeach
 
-      {{-- Baris Terbilang --}}
-      <tr class="terbilang-row">
-        <td colspan="7">
-          <strong>Terbilang :</strong>&nbsp;&nbsp;{{ $terbilang ?? '' }}
-        </td>
-      </tr>
+    {{-- Summary — colspan selalu 7 karena kolom diskon dihapus dari tabel --}}
+    <tr>
+      <td colspan="7" style="text-align:right; font-weight:bold; border-right:1px solid #000;">Subtotal</td>
+      <td class="right" style="font-weight:bold;">Rp {{ number_format($subtotal, 0, ',', '.') }}</td>
+    </tr>
 
-    </tbody>
-  </table>
+    {{-- ✅ Baris diskon — hanya muncul jika ada nilai diskon --}}
+    @if(!empty($proforma->discount_amount) && (float)$proforma->discount_amount > 0)
+    <tr>
+      <td colspan="7" style="text-align:right; font-weight:bold; border-right:1px solid #000;">
+        Diskon
+        @if(!empty($proforma->discount_percentage) && (float)$proforma->discount_percentage > 0)
+          ({{ number_format((float)$proforma->discount_percentage, 0) }}%)
+        @endif
+      </td>
+      <td class="right">- Rp {{ number_format($proforma->discount_amount, 0, ',', '.') }}</td>
+    </tr>
+    @endif
+
+    <tr>
+      <td colspan="7" style="text-align:right; font-weight:bold; border-right:1px solid #000;">
+        PPN
+      </td>
+      <td class="right">Rp {{ number_format($ppn, 0, ',', '.') }}</td>
+    </tr>
+
+    <tr class="total-row">
+      <td colspan="7" style="text-align:right; font-weight:bold; border-right:1px solid #000;">Total</td>
+      <td class="right" style="font-weight:bold;">Rp {{ number_format($total, 0, ',', '.') }}</td>
+    </tr>
+
+    <tr class="terbilang-row">
+      <td colspan="8"><strong>Terbilang :</strong>&nbsp;&nbsp;{{ $terbilang ?? '' }}</td>
+    </tr>
+  </tbody>
+</table>
+
+  {{-- ✅ Dynamic Terms Section --}}
+  @if($terms && $terms->count() > 0)
+  <div class="terms-section">
+    <p>Syarat dan Ketentuan :</p>
+    <ol>
+      @foreach($terms as $term)
+      <li>{{ $term->term_content }}</li>
+      @endforeach
+    </ol>
+  </div>
+  @endif
 
   {{-- =========================================================
        BANK INFO

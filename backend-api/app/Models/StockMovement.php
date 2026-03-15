@@ -9,7 +9,7 @@ class StockMovement extends Model
     protected $table = 'stock_movements';
     protected $primaryKey = 'movement_id';
 
-    public $timestamps = false; // tabel hanya punya created_at
+    public $timestamps = true; // tabel hanya punya created_at
 protected $fillable = [
     'product_id',
     'batch_id',
@@ -22,8 +22,8 @@ protected $fillable = [
       'movement_date',
     'notes',
     'created_by',
-    'created_at',  // ✅ tambah
-    'updated_at',  // ✅ tambah
+    'created_at',
+    'updated_at',
 ];
 
 

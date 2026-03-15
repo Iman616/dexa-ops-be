@@ -68,6 +68,7 @@ class ProformaInvoiceItem extends Model
     'unit',
     'unit_price',
     'notes',
+    'discount_percent',
 ];
 
 
@@ -134,10 +135,12 @@ class ProformaInvoiceItem extends Model
      *
      * @return float
      */
-    public function getSubtotalAttribute(): float
-    {
-        return $this->quantity * $this->unit_price;
-    }
+  public function getSubtotalAttribute(): float
+{
+    $gross    = (float)$this->quantity * (float)$this->unit_price;
+    $discount = $gross * ((float)($this->attributes['discount_percent'] ?? 0) / 100);
+    return $gross - $discount;
+}
 
     /**
      * Get formatted quantity.

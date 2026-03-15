@@ -172,17 +172,21 @@ class StockInController extends Controller
             }
 
             // Stock movement
-            \App\Models\StockMovement::create([
-                'product_id'     => $request->product_id,
-                'batch_id'       => $batch->batch_id,
-                'movement_type'  => 'in',  // ✅ lowercase konsisten
-                'quantity'       => $request->quantity,
-                'unit_cost'      => $request->purchase_price,
-                'reference_id'   => $stockIn->stock_in_id,
-                'reference_type' => 'stock_in',
-                'notes'          => 'Stock IN manual: ' . ($request->notes ?? ''),
-                'created_by'     => Auth::id(),
-            ]);
+          // StockInController — fix movement_type + tambah timestamps
+\App\Models\StockMovement::create([
+    'product_id'     => $request->product_id,
+    'batch_id'       => $batch->batch_id,
+    'movement_type'  => 'IN',
+    'quantity'       => $request->quantity,
+    'unit_cost'      => $request->purchase_price,
+    'reference_id'   => $stockIn->stock_in_id,
+    'reference_type' => 'stock_in',
+    'notes'          => 'Stock IN manual: ' . ($request->notes ?? ''),
+    'created_by'     => Auth::id(),
+    'movement_date'  => now(), // ✅
+    'created_at'     => now(), // ✅
+    'updated_at'     => now(), // ✅
+]);
 
             // Auto-upsert ProductSupplier ✅ FIXED: tidak pakai updateFromStockIn()
             if ($supplierId) {
